@@ -53,7 +53,7 @@ class Perception:
         # cv2.imwrite(save_path, rgb_image)
         # cv2.imshow('cv_img', rgb_image)
 
-        model = YOLO("/opt/ros_ws/src/perception/scripts/best.pt")  # Load a trained model
+        model = YOLO("/opt/ros_ws/src/perception/model/best.pt")  # Load a trained model
         source = rgb_image
         results = model(source)                                     # return a list of Results objects
 

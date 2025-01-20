@@ -1,13 +1,13 @@
 import numpy as np
-from scipy.ndimage import filters
-  
 import cv2
 import rospy
 import open3d as o3d
 from scipy.spatial.transform import Rotation as R
 from open3d.visualization import draw_plotly
-from sensor_msgs.msg import CompressedImage, PointCloud2
+from sensor_msgs.msg import CompressedImage, PointCloud2, PointField
 from sensor_msgs import point_cloud2 as pc2
+from sensor_msgs.point_cloud2 import create_cloud
+import std_msgs.msg
 
 from ultralytics import YOLO
 
@@ -15,81 +15,84 @@ class Perception:
     def __init__(self):
         self.xyxy = None
 
-    def TF_camera_to_base(self):
-        rpy_base_to_hand = [-3.141583, 0.001902, 0.000062]
-        translation_base_to_hand = [0.307027, 0, 0.530901]
-        rotation_base_to_hand = R.from_euler('xyz', rpy_base_to_hand).as_matrix()
+    def filter_pc(self, point_cloud_np, bboxes):
+        if point_cloud_np.shape[1] == 4:
+            point_cloud_np = point_cloud_np[:, :3]
 
-        rpy_hand_to_camera = [0, -1.35, 0]
-        translation_hand_to_camera = [-0.115, 0.056, 0.018]
-        rotation_hand_to_camera = R.from_euler('xyz', rpy_hand_to_camera).as_matrix()
+        # K = [527.2972398956961, 0.0, 658.8206787109375, 0.0, 527.2972398956961, 372.25787353515625, 0.0, 0.0, 1.0]
+        # fx, fy = K[0], K[4]
+        # cx_cam, cy_cam = K[2], K[5]
+        fx, fy = 527.2972398956961, 527.2972398956961
+        cx_cam, cy_cam = 640, 360
 
-        T_base_to_hand = np.eye(4)
-        T_base_to_hand[:3, :3] = rotation_base_to_hand
-        T_base_to_hand[:3, 3] = translation_base_to_hand
-        T_hand_to_camera = np.eye(4)
-        T_hand_to_camera[:3, :3] = rotation_hand_to_camera
-        T_hand_to_camera[:3, 3] = translation_hand_to_camera
+        bboxes_ = bboxes.cpu().numpy()
+        filtered_points = []
+        for bbox in bboxes_:
+            x1, y1, x2, y2 = bbox
 
-        T_base_to_camera = np.dot(T_base_to_hand, T_hand_to_camera)
-        print("Transformation Matrix from Base to Camera:\n", T_base_to_camera)
-        T_camera_to_base = np.linalg.inv(T_base_to_camera)
-        print("Transformation Matrix from Camera to Base:\n", T_camera_to_base)
+            X, Y, Z = point_cloud_np[:, 0], point_cloud_np[:, 1], point_cloud_np[:, 2]
+            u = (X * fx / Z) + cx_cam
+            v = (Y * fy / Z) + cy_cam
+            
+            in_bbox = (u >= x1) & (u <= x2) & (v >= y1) & (v <= y2)
+            filtered_points.append(point_cloud_np[in_bbox])
+            
+        if len(filtered_points) > 0:
+            filtered_points = np.vstack(filtered_points) 
+        else:
+            filtered_points = np.empty((0, 3)) 
 
-        return T_camera_to_base
+        # calibration
+        extrinsic_rotation = R.from_quat([0.658734, 0.658652, 0.257135, 0.257155]).as_matrix()     # z=-89.9905881 y=42.6502037 x=179.9937162                   # X 217
+        extrinsic_translation = np.array([0.209647, -0.0600195, 0.56205])  
+        points_base_frame = (extrinsic_rotation @ filtered_points.T).T + extrinsic_translation  
+        points_base_frame = points_base_frame[points_base_frame[:, 2] > 0.0005]     # 0.000067
+ 
+        point_cloud = o3d.geometry.PointCloud()
+        point_cloud.points = o3d.utility.Vector3dVector(points_base_frame)
+        o3d.visualization.draw_geometries([point_cloud])
+        draw_plotly([point_cloud])
 
-    def calibrate_pc(self, point_cloud_np, T_camera_to_base):
-        points_homogeneous = np.hstack((point_cloud_np, np.ones((point_cloud_np.shape[0], 1))))
-        calibrated_points_homogeneous = np.dot(T_camera_to_base, points_homogeneous.T).T
-        calibrated_points = calibrated_points_homogeneous[:, :3]
-
-        return calibrated_points
+        return point_cloud     
+    
 
     def callback_rgb(self, data):
         np_arr = np.frombuffer(data.data, np.uint8)
         rgb_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR) 
    
-        # save_path = "/opt/ros_ws/src/perception/dataset/test1.jpg"
-        # cv2.imwrite(save_path, rgb_image)
-        # cv2.imshow('cv_img', rgb_image)
-
-        model = YOLO("/opt/ros_ws/src/perception/model/best.pt")  # Load a trained model
+        model = YOLO("/opt/ros_ws/src/perception/model/best.pt")    # Load a trained model
         source = rgb_image
         results = model(source)                                     # return a list of Results objects
 
         for result in results:
             boxes = result.boxes                                    # Boxes object for bounding box outputs
-            # print(boxes.xywh)
             self.xyxy = boxes.xyxy
-            print(self.xyxy)
-            masks = result.masks                                    # Masks object for segmentation masks outputs
-            keypoints = result.keypoints                            # Keypoints object for pose outputs
-            probs = result.probs                                    # Probs object for classification outputs
-            obb = result.obb                                        # Oriented boxes object for OBB outputs
             result.save("/opt/ros_ws/src/perception/test_images/result0.jpg")
 
     def callback_pc(self, data):
+        # print("Data: ",data.header.frame_id)
         pc_data = pc2.read_points(data, field_names=("x", "y", "z"), skip_nans=True)
-        points = list(pc_data)
-        point_cloud_np = np.array(points)
+        point_cloud_np = np.array(list(pc_data))
 
-        T_camera_to_base = self.TF_camera_to_base()
-        calibrated_points = self.calibrate_pc(point_cloud_np, T_camera_to_base)
-
-        # z_threshold = 0.03  #[0.7,1]
-        # filtered_points = point_cloud_np[(calibrated_points[:, 2] <= z_threshold)]
+        if self.xyxy is not None:
+            filtered_point_cloud = self.filter_pc(point_cloud_np, self.xyxy)
+            filtered_points_np = np.asarray(filtered_point_cloud.points)
         
-        calibrated_pc = o3d.geometry.PointCloud()
-        calibrated_pc.points = o3d.utility.Vector3dVector(calibrated_points)
+            header = std_msgs.msg.Header()
+            header.stamp = rospy.Time.now()
+            # header.frame_id = "left_camera_link_optical"  
+            header.frame_id = "world"
+            fields = [
+                PointField('x', 0, PointField.FLOAT32, 1),
+                PointField('y', 4, PointField.FLOAT32, 1),
+                PointField('z', 8, PointField.FLOAT32, 1),
+            ]
 
-        coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
-        coordinate_frame.transform(T_camera_to_base)
-        
-        o3d.visualization.draw_geometries([calibrated_pc, coordinate_frame])
-        # o3d.visualization.draw_geometries([calibrated_pc])
-        # draw_plotly([calibrated_pc])
+            point_cloud_msg = create_cloud(header, fields, filtered_points_np)
+            print("test")
+            pub.publish(point_cloud_msg)         
 
-def perception_node():
+def perception():
     perception = Perception()
 
     rospy.init_node('perception', anonymous=True)
@@ -98,8 +101,12 @@ def perception_node():
     rospy.Subscriber("/zed2/zed_node/point_cloud/cloud_registered",
         PointCloud2, perception.callback_pc,  queue_size = 10)
     
+    global pub
+    pub = rospy.Publisher('filtered_point_cloud', PointCloud2, queue_size=10)
+    
     rospy.spin()
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':
-    perception_node()
+    perception()
+

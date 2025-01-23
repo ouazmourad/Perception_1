@@ -8,6 +8,8 @@ from sensor_msgs.msg import CompressedImage, PointCloud2, PointField
 from sensor_msgs import point_cloud2 as pc2
 from sensor_msgs.point_cloud2 import create_cloud
 import std_msgs.msg
+# import matplotlib.pyplot as plt
+from matplotlib import colormaps
 
 from ultralytics import YOLO
 
@@ -27,33 +29,53 @@ class Perception:
 
         bboxes_ = bboxes.cpu().numpy()
         filtered_points = []
-        for bbox in bboxes_:
+        labels = [] 
+
+        for i, bbox in enumerate(bboxes_):  
             x1, y1, x2, y2 = bbox
+            # print("bbox111111111111111111111111111111111111111111111111 ", bbox)
 
             X, Y, Z = point_cloud_np[:, 0], point_cloud_np[:, 1], point_cloud_np[:, 2]
             u = (X * fx / Z) + cx_cam
             v = (Y * fy / Z) + cy_cam
-            
+
             in_bbox = (u >= x1) & (u <= x2) & (v >= y1) & (v <= y2)
             filtered_points.append(point_cloud_np[in_bbox])
-            
+            labels.append(np.full((np.sum(in_bbox), 1), i + 1))  # Assign bbox labels to points, starting from 1
+
         if len(filtered_points) > 0:
-            filtered_points = np.vstack(filtered_points) 
+            filtered_points = np.vstack(filtered_points)
+            labels = np.vstack(labels)
+            filtered_points = np.hstack((filtered_points, labels))  # Add labels as a fourth column
         else:
-            filtered_points = np.empty((0, 3)) 
+            filtered_points = np.empty((0, 4)) 
 
         # calibration
-        extrinsic_rotation = R.from_quat([0.658734, 0.658652, 0.257135, 0.257155]).as_matrix()     # z=-89.9905881 y=42.6502037 x=179.9937162                   # X 217
-        extrinsic_translation = np.array([0.209647, -0.0600195, 0.56205])  
-        points_base_frame = (extrinsic_rotation @ filtered_points.T).T + extrinsic_translation  
-        points_base_frame = points_base_frame[points_base_frame[:, 2] > 0.0005]     # 0.000067
- 
+        extrinsic_rotation = R.from_quat([0.658734, 0.658652, 0.257135, 0.257155]).as_matrix()
+        extrinsic_translation = np.array([0.209647, -0.0600195, 0.56205])
+        points_base_frame = (extrinsic_rotation @ filtered_points[:, :3].T).T + extrinsic_translation
+        valid_mask = points_base_frame[:, 2] > 0.0005  
+
+        # Synchronously remove invalid points and labels
+        points_base_frame = points_base_frame[valid_mask]
+        labels = filtered_points[valid_mask, 3:4]  
+
+        # calibration point cloud and labels
+        points_with_labels = np.hstack((points_base_frame, labels))
+        
         point_cloud = o3d.geometry.PointCloud()
-        point_cloud.points = o3d.utility.Vector3dVector(points_base_frame)
+        point_cloud.points = o3d.utility.Vector3dVector(points_with_labels[:, :3])
+        
+  
+        # unique_labels = np.unique(points_with_labels[:, 3])
+        colors = colormaps["tab10"]
+        point_colors = np.array([colors(int(label) % 10)[:3] for label in points_with_labels[:, 3]])  # Assign a color to each point
+        point_cloud.colors = o3d.utility.Vector3dVector(point_colors)
+
         o3d.visualization.draw_geometries([point_cloud])
         draw_plotly([point_cloud])
 
-        return point_cloud     
+        return points_with_labels
     
 
     def callback_rgb(self, data):
@@ -70,27 +92,32 @@ class Perception:
             result.save("/opt/ros_ws/src/perception/test_images/result0.jpg")
 
     def callback_pc(self, data):
-        # print("Data: ",data.header.frame_id)
         pc_data = pc2.read_points(data, field_names=("x", "y", "z"), skip_nans=True)
         point_cloud_np = np.array(list(pc_data))
 
         if self.xyxy is not None:
-            filtered_point_cloud = self.filter_pc(point_cloud_np, self.xyxy)
-            filtered_points_np = np.asarray(filtered_point_cloud.points)
-        
+            filtered_points_with_labels = self.filter_pc(point_cloud_np, self.xyxy)
+            
+            # Creating a PointCloud2 Message
+            filtered_points_np = filtered_points_with_labels[:, :3]
+            labels_np = filtered_points_with_labels[:, 3]
+            
             header = std_msgs.msg.Header()
             header.stamp = rospy.Time.now()
-            # header.frame_id = "left_camera_link_optical"  
             header.frame_id = "world"
+            
             fields = [
                 PointField('x', 0, PointField.FLOAT32, 1),
                 PointField('y', 4, PointField.FLOAT32, 1),
                 PointField('z', 8, PointField.FLOAT32, 1),
+                PointField('label', 12, PointField.FLOAT32, 1),  
             ]
-
-            point_cloud_msg = create_cloud(header, fields, filtered_points_np)
-            print("test")
-            pub.publish(point_cloud_msg)         
+            
+            # Combine points and labels
+            combined_points = np.hstack((filtered_points_np, labels_np.reshape(-1, 1)))
+            point_cloud_msg = create_cloud(header, fields, combined_points)
+            
+            pub.publish(point_cloud_msg)  
 
 def perception():
     perception = Perception()
@@ -109,4 +136,3 @@ def perception():
 
 if __name__ == '__main__':
     perception()
-

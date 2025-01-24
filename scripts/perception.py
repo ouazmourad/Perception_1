@@ -36,7 +36,7 @@ class Perception:
         translation = np.array([x, y, z])
         rotation_matrix = R.from_euler('z', yaw, degrees=True).as_matrix() 
 
-        axis_length = 0.1
+        axis_length = 0.05
 
         # X-axis(red)
         x_axis = o3d.geometry.LineSet()
@@ -81,7 +81,6 @@ class Perception:
         bboxes_ = bboxes.cpu().numpy()
         filtered_points = []
         labels = [] 
-        label_stats = {} 
         for i, bbox in enumerate(bboxes_):  
             x1, y1, x2, y2 = bbox
 
@@ -103,13 +102,13 @@ class Perception:
         points_base_frame = (extrinsic_rotation @ filtered_points[:, :3].T).T + extrinsic_translation
         valid_mask = points_base_frame[:, 2] > 0.0005  
 
-        # Synchronously remove invalid points and labels
         points_base_frame = points_base_frame[valid_mask]
         labels = filtered_points[valid_mask, 3:4]  
         points_with_labels = np.hstack((points_base_frame, labels))
         
-        # cube pose
-        axes = [] 
+        ### cube pose ###
+        # calculate inaccurate translation(center points of cubes)
+        cube_centers = [] 
         for label in np.unique(labels):
             points_for_label = points_with_labels[points_with_labels[:, 3] == label]
             
@@ -132,18 +131,58 @@ class Perception:
             midpoint_y = (midpoint1_y + midpoint2_y) / 2
             midpoint_z = zmax / 2
 
+            cube_centers.append((midpoint_x, midpoint_y, midpoint_z))
+
+        # reassign points by distance
+        closest_labels = []
+        for point_idx, point in enumerate(points_with_labels[:, :3]):
+            distances = []
+            for cube_idx, (cx, cy, cz) in enumerate(cube_centers):
+                dist = np.sqrt((point[0] - cx)**2 + (point[1] - cy)**2 + (point[2] - cz)**2)
+                distances.append((cube_idx + 1, dist))  # save (label, distance)
+
+            # Sort by distance and select the closest label
+            distances.sort(key=lambda x: x[1])
+            closest_label = distances[0][0]
+            points_with_labels[point_idx, 3] = closest_label  # Update point labels
+
+            closest_labels.append(closest_label)
+        
+        # calculate accurate translation and rotation, draw coordinate axes
+        label_stats = {} 
+        axes = []
+        for closest_label in np.unique(closest_labels):
+            points_for_closest_label = points_with_labels[points_with_labels[:, 3] == closest_label]
+            
+            xmax = points_for_closest_label[:, 0].max()
+            xmin = points_for_closest_label[:, 0].min()
+            ymax = points_for_closest_label[:, 1].max()
+            ymin = points_for_closest_label[:, 1].min()
+            zmax = points_for_closest_label[:, 2].max()
+
+            y_for_xmax = np.mean(points_for_closest_label[points_for_closest_label[:, 0] == xmax, 1]) 
+            y_for_xmin = np.mean(points_for_closest_label[points_for_closest_label[:, 0] == xmin, 1])
+            x_for_ymax = np.mean(points_for_closest_label[points_for_closest_label[:, 1] == ymax, 0])
+            x_for_ymin = np.mean(points_for_closest_label[points_for_closest_label[:, 1] == ymin, 0])
+
+            midpoint1_x = (xmax + xmin) / 2
+            midpoint1_y = (y_for_xmax + y_for_xmin) / 2
+            midpoint2_x = (x_for_ymax + x_for_ymin) / 2
+            midpoint2_y = (ymax + ymin) / 2
+            midpoint_x = (midpoint1_x + midpoint2_x) / 2
+            midpoint_y = (midpoint1_y + midpoint2_y) / 2
+            midpoint_z = zmax / 2
+
             yaw = self.calculate_angle(x1=xmin, y1=y_for_xmin, x2=x_for_ymax, y2=ymax, x3=0, y3=0, x4=1, y4=0)
 
-            label_stats[label] = {
+            label_stats[closest_label] = {
                 "translation": (midpoint_x, midpoint_y, midpoint_z),
                 "rotation": (0, 0, yaw)
             }
             
-            # draw coordinate axes
             x_axis, y_axis, z_axis = self.cube_axes(midpoint_x, midpoint_y, midpoint_z, yaw)
             axes.extend([x_axis, y_axis, z_axis])
 
-        print("Label Statistics:")
         for label, stats in label_stats.items():
             print(f"Cube {label}:")
             print(f"  translation: {stats['translation']}")
@@ -156,8 +195,6 @@ class Perception:
         colors = colormaps["tab10"]
         point_colors = np.array([colors(int(label) % 10)[:3] for label in points_with_labels[:, 3]])  
         point_cloud.colors = o3d.utility.Vector3dVector(point_colors)
-
-
 
         o3d.visualization.draw_geometries([point_cloud] + axes)
         draw_plotly([point_cloud] + axes)

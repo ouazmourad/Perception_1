@@ -8,7 +8,7 @@ from sensor_msgs.msg import CompressedImage, PointCloud2, PointField
 from sensor_msgs import point_cloud2 as pc2
 from sensor_msgs.point_cloud2 import create_cloud
 from geometry_msgs.msg import Pose
-from visualization_msgs.msg import Marker, MarkerArray
+from visualization_msgs.msg import Marker
 import std_msgs.msg
 from matplotlib import colormaps
 import tf.transformations as tft
@@ -61,6 +61,22 @@ class Perception:
 
             closest_labels.append(closest_label)
         
+        return closest_labels, points_with_labels
+
+    def knn_until_convergence(self, labels, points_with_labels):
+        previous_labels = None
+        iteration = 0
+
+        while True:
+            closest_labels, points_with_labels = self.knn(labels, points_with_labels)
+
+            if previous_labels is not None and np.array_equal(previous_labels, closest_labels):
+                print(f"\nConverged after {iteration} iterations.\n")
+                break
+
+            previous_labels = closest_labels
+            iteration += 1
+
         return closest_labels, points_with_labels
 
     def calculate_angle(self, x1, y1, x2, y2, x3, y3, x4, y4):
@@ -217,11 +233,8 @@ class Perception:
         points_with_labels = np.hstack((points_base_frame, labels))
         
         ### cube pose ###
-        # KNN
-        closest_labels, points_with_labels = self.knn(labels, points_with_labels)
-        closest_labels, points_with_labels = self.knn(labels, points_with_labels)
-        closest_labels, points_with_labels = self.knn(labels, points_with_labels)
-        
+        closest_labels, points_with_labels = self.knn_until_convergence(labels, points_with_labels)
+    
         # calculate accurate translation and rotation, draw coordinate axes
         label_stats = {} 
         axes = []
@@ -289,9 +302,11 @@ class Perception:
             result.save("/opt/ros_ws/src/perception/test_images/result0.jpg")
 
     def callback_pc(self, data):
+        # subscribe
         pc_data = pc2.read_points(data, field_names=("x", "y", "z"), skip_nans=True)
         point_cloud_np = np.array(list(pc_data))
 
+        # publish
         if self.xyxy is not None:
             filtered_points_with_labels, label_stats = self.filter_pc(point_cloud_np, self.xyxy)
             

@@ -7,14 +7,61 @@ from open3d.visualization import draw_plotly
 from sensor_msgs.msg import CompressedImage, PointCloud2, PointField
 from sensor_msgs import point_cloud2 as pc2
 from sensor_msgs.point_cloud2 import create_cloud
+from geometry_msgs.msg import Pose
+from visualization_msgs.msg import Marker, MarkerArray
 import std_msgs.msg
 from matplotlib import colormaps
+import tf.transformations as tft
+from geometry_msgs.msg import Pose, PoseArray
 
 from ultralytics import YOLO
 
 class Perception:
     def __init__(self):
         self.xyxy = None
+
+    def knn(self, labels, points_with_labels):
+        cube_centers = [] 
+        for label in np.unique(labels):
+            points_for_label = points_with_labels[points_with_labels[:, 3] == label]
+            
+            xmax = points_for_label[:, 0].max()
+            xmin = points_for_label[:, 0].min()
+            ymax = points_for_label[:, 1].max()
+            ymin = points_for_label[:, 1].min()
+            zmax = points_for_label[:, 2].max()
+
+            y_for_xmax = np.mean(points_for_label[points_for_label[:, 0] == xmax, 1]) 
+            y_for_xmin = np.mean(points_for_label[points_for_label[:, 0] == xmin, 1])
+            x_for_ymax = np.mean(points_for_label[points_for_label[:, 1] == ymax, 0])
+            x_for_ymin = np.mean(points_for_label[points_for_label[:, 1] == ymin, 0])
+
+            midpoint1_x = (xmax + xmin) / 2
+            midpoint1_y = (y_for_xmax + y_for_xmin) / 2
+            midpoint2_x = (x_for_ymax + x_for_ymin) / 2
+            midpoint2_y = (ymax + ymin) / 2
+            midpoint_x = (midpoint1_x + midpoint2_x) / 2
+            midpoint_y = (midpoint1_y + midpoint2_y) / 2
+            midpoint_z = zmax / 2
+
+            cube_centers.append((midpoint_x, midpoint_y, midpoint_z))
+
+        # reassign points by distance
+        closest_labels = []
+        for point_idx, point in enumerate(points_with_labels[:, :3]):
+            distances = []
+            for cube_idx, (cx, cy, cz) in enumerate(cube_centers):
+                dist = np.sqrt((point[0] - cx)**2 + (point[1] - cy)**2 + (point[2] - cz)**2)
+                distances.append((cube_idx + 1, dist))  # save (label, distance)
+
+            # Sort by distance and select the closest label
+            distances.sort(key=lambda x: x[1])
+            closest_label = distances[0][0]
+            points_with_labels[point_idx, 3] = closest_label  # Update point labels
+
+            closest_labels.append(closest_label)
+        
+        return closest_labels, points_with_labels
 
     def calculate_angle(self, x1, y1, x2, y2, x3, y3, x4, y4):
         v1 = np.array([x2 - x1, y2 - y1])
@@ -32,13 +79,14 @@ class Perception:
         
         return theta
 
+    # draw cube axes in Open3D(optional)
     def cube_axes(self, x, y, z, yaw):
         translation = np.array([x, y, z])
         rotation_matrix = R.from_euler('z', yaw, degrees=True).as_matrix() 
 
         axis_length = 0.05
 
-        # X-axis(red)
+        # --- X-axis(red) ---
         x_axis = o3d.geometry.LineSet()
         x_axis.points = o3d.utility.Vector3dVector([
             translation, 
@@ -47,7 +95,7 @@ class Perception:
         x_axis.lines = o3d.utility.Vector2iVector([[0, 1]])
         x_axis.colors = o3d.utility.Vector3dVector([[1, 0, 0]]) 
 
-        # Y-axis(green)
+        # --- Y-axis(green) ---
         y_axis = o3d.geometry.LineSet()
         y_axis.points = o3d.utility.Vector3dVector([
             translation, 
@@ -56,7 +104,7 @@ class Perception:
         y_axis.lines = o3d.utility.Vector2iVector([[0, 1]])
         y_axis.colors = o3d.utility.Vector3dVector([[0, 1, 0]])
 
-        # Z-axis(blue)
+        # --- Z-axis(blue) ---
         z_axis = o3d.geometry.LineSet()
         z_axis.points = o3d.utility.Vector3dVector([
             translation, 
@@ -67,6 +115,68 @@ class Perception:
 
         return x_axis, y_axis, z_axis
 
+    # draw cube axes in RViz
+    def create_axis_markers(self, pose, marker_id_start, frame_id="map"):
+        markers = []
+        arrow_length = 0.5
+        arrow_diameter = 0.05
+
+        # --- X-axis(red) ---
+        marker_x = Marker()
+        marker_x.header.frame_id = frame_id
+        marker_x.type = Marker.ARROW
+        marker_x.action = Marker.ADD
+        marker_x.id = marker_id_start
+        marker_x.pose = pose
+        marker_x.scale.x = arrow_length
+        marker_x.scale.y = arrow_diameter
+        marker_x.scale.z = arrow_diameter
+        marker_x.color.r = 1.0
+        marker_x.color.a = 1.0
+
+        markers.append(marker_x)
+
+        # --- Y-axis(green) ---
+        marker_y = Marker()
+        marker_y.header.frame_id = frame_id
+        marker_y.type = Marker.ARROW
+        marker_y.action = Marker.ADD
+        marker_y.id = marker_id_start + 1
+        marker_y.pose = pose
+        marker_y.scale.x = arrow_length
+        marker_y.scale.y = arrow_diameter
+        marker_y.scale.z = arrow_diameter
+        marker_y.color.g = 1.0
+        marker_y.color.a = 1.0
+
+        quat_y = tft.quaternion_from_euler(0, 0, 1.5708)
+        marker_y.pose.orientation.x = quat_y[0]
+        marker_y.pose.orientation.y = quat_y[1]
+        marker_y.pose.orientation.z = quat_y[2]
+        marker_y.pose.orientation.w = quat_y[3]
+        markers.append(marker_y)
+
+        # --- Z-axis(blue) ---
+        marker_z = Marker()
+        marker_z.header.frame_id = frame_id
+        marker_z.type = Marker.ARROW
+        marker_z.action = Marker.ADD
+        marker_z.id = marker_id_start + 2
+        marker_z.pose = pose
+        marker_z.scale.x = arrow_length
+        marker_z.scale.y = arrow_diameter
+        marker_z.scale.z = arrow_diameter
+        marker_z.color.b = 1.0
+        marker_z.color.a = 1.0
+
+        quat_z = tft.quaternion_from_euler(0, -1.5708, 0)
+        marker_z.pose.orientation.x = quat_z[0]
+        marker_z.pose.orientation.y = quat_z[1]
+        marker_z.pose.orientation.z = quat_z[2]
+        marker_z.pose.orientation.w = quat_z[3]
+        markers.append(marker_z)
+
+        return markers
 
     def filter_pc(self, point_cloud_np, bboxes):
         if point_cloud_np.shape[1] == 4:
@@ -107,46 +217,10 @@ class Perception:
         points_with_labels = np.hstack((points_base_frame, labels))
         
         ### cube pose ###
-        # calculate inaccurate translation(center points of cubes)
-        cube_centers = [] 
-        for label in np.unique(labels):
-            points_for_label = points_with_labels[points_with_labels[:, 3] == label]
-            
-            xmax = points_for_label[:, 0].max()
-            xmin = points_for_label[:, 0].min()
-            ymax = points_for_label[:, 1].max()
-            ymin = points_for_label[:, 1].min()
-            zmax = points_for_label[:, 2].max()
-
-            y_for_xmax = np.mean(points_for_label[points_for_label[:, 0] == xmax, 1]) 
-            y_for_xmin = np.mean(points_for_label[points_for_label[:, 0] == xmin, 1])
-            x_for_ymax = np.mean(points_for_label[points_for_label[:, 1] == ymax, 0])
-            x_for_ymin = np.mean(points_for_label[points_for_label[:, 1] == ymin, 0])
-
-            midpoint1_x = (xmax + xmin) / 2
-            midpoint1_y = (y_for_xmax + y_for_xmin) / 2
-            midpoint2_x = (x_for_ymax + x_for_ymin) / 2
-            midpoint2_y = (ymax + ymin) / 2
-            midpoint_x = (midpoint1_x + midpoint2_x) / 2
-            midpoint_y = (midpoint1_y + midpoint2_y) / 2
-            midpoint_z = zmax / 2
-
-            cube_centers.append((midpoint_x, midpoint_y, midpoint_z))
-
-        # reassign points by distance
-        closest_labels = []
-        for point_idx, point in enumerate(points_with_labels[:, :3]):
-            distances = []
-            for cube_idx, (cx, cy, cz) in enumerate(cube_centers):
-                dist = np.sqrt((point[0] - cx)**2 + (point[1] - cy)**2 + (point[2] - cz)**2)
-                distances.append((cube_idx + 1, dist))  # save (label, distance)
-
-            # Sort by distance and select the closest label
-            distances.sort(key=lambda x: x[1])
-            closest_label = distances[0][0]
-            points_with_labels[point_idx, 3] = closest_label  # Update point labels
-
-            closest_labels.append(closest_label)
+        # KNN
+        closest_labels, points_with_labels = self.knn(labels, points_with_labels)
+        closest_labels, points_with_labels = self.knn(labels, points_with_labels)
+        closest_labels, points_with_labels = self.knn(labels, points_with_labels)
         
         # calculate accurate translation and rotation, draw coordinate axes
         label_stats = {} 
@@ -197,12 +271,9 @@ class Perception:
         point_cloud.colors = o3d.utility.Vector3dVector(point_colors)
 
         o3d.visualization.draw_geometries([point_cloud] + axes)
-        draw_plotly([point_cloud] + axes)
-        # o3d.visualization.draw_geometries([point_cloud])
-        # draw_plotly([point_cloud])
+        # draw_plotly([point_cloud] + axes)
 
-        return points_with_labels
-    
+        return points_with_labels, label_stats
 
     def callback_rgb(self, data):
         np_arr = np.frombuffer(data.data, np.uint8)
@@ -222,9 +293,9 @@ class Perception:
         point_cloud_np = np.array(list(pc_data))
 
         if self.xyxy is not None:
-            filtered_points_with_labels = self.filter_pc(point_cloud_np, self.xyxy)
+            filtered_points_with_labels, label_stats = self.filter_pc(point_cloud_np, self.xyxy)
             
-            # Creating a PointCloud2 Message
+            # create a PointCloud2 Message
             filtered_points_np = filtered_points_with_labels[:, :3]
             labels_np = filtered_points_with_labels[:, 3]
             
@@ -239,11 +310,33 @@ class Perception:
                 PointField('label', 12, PointField.FLOAT32, 1),  
             ]
             
-            # Combine points and labels
             combined_points = np.hstack((filtered_points_np, labels_np.reshape(-1, 1)))
             point_cloud_msg = create_cloud(header, fields, combined_points)
             
-            pub.publish(point_cloud_msg)  
+            pub_pointcloud.publish(point_cloud_msg)  
+
+            # create a PoseArray Message
+            pose_array = PoseArray()
+            pose_array.header.frame_id = "world"
+
+            for label, stats in label_stats.items():
+                pose = Pose()
+                translation = stats['translation']
+                rotation = stats['rotation']
+                
+                pose.position.x = translation[0]
+                pose.position.y = translation[1]
+                pose.position.z = translation[2]
+                
+                quaternion = R.from_euler('xyz', rotation, degrees=True).as_quat()
+                pose.orientation.x = quaternion[0]
+                pose.orientation.y = quaternion[1]
+                pose.orientation.z = quaternion[2]
+                pose.orientation.w = quaternion[3]
+                
+                pose_array.poses.append(pose)
+            
+            pub_cube_pose.publish(pose_array)
 
 def perception():
     perception = Perception()
@@ -254,8 +347,9 @@ def perception():
     rospy.Subscriber("/zed2/zed_node/point_cloud/cloud_registered",
         PointCloud2, perception.callback_pc,  queue_size = 10)
     
-    global pub
-    pub = rospy.Publisher('filtered_point_cloud', PointCloud2, queue_size=10)
+    global pub_pointcloud, pub_cube_pose
+    pub_pointcloud = rospy.Publisher('filtered_point_cloud', PointCloud2, queue_size=10)
+    pub_cube_pose = rospy.Publisher('cube_pose', PoseArray, queue_size=10)
     
     rospy.spin()
     cv2.destroyAllWindows()

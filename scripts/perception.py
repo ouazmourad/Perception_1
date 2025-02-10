@@ -14,6 +14,8 @@ from matplotlib import colormaps
 import tf.transformations as tft
 from geometry_msgs.msg import Pose, PoseArray
 
+import os
+
 from ultralytics import YOLO
 
 class Perception:
@@ -291,15 +293,20 @@ class Perception:
     def callback_rgb(self, data):
         np_arr = np.frombuffer(data.data, np.uint8)
         rgb_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR) 
-   
-        model = YOLO("/opt/ros_ws/src/perception/model/best.pt")    # Load a trained model
+
+        repo_folder = os.path.join(os.path.dirname(__file__), os.path.pardir)
+
+        model_path = os.path.join(repo_folder, "model", "best.pt")
+
+        model = YOLO(model_path)    # Load a trained model
         source = rgb_image
         results = model(source)                                     # return a list of Results objects
 
-        for result in results:
+        for i, result in enumerate(results):
             boxes = result.boxes                                    # Boxes object for bounding box outputs
             self.xyxy = boxes.xyxy
-            result.save("/opt/ros_ws/src/perception/test_images/result0.jpg")
+            save_path = os.path.join(repo_folder, "test_images", f"result{i}.jpg")
+            result.save(save_path)
 
     def callback_pc(self, data):
         # subscribe

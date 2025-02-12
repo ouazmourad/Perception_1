@@ -3,7 +3,7 @@ import cv2
 import rospy
 import open3d as o3d
 from scipy.spatial.transform import Rotation as R
-from open3d.visualization import draw_plotly
+# from open3d.visualization import draw_plotly
 from sensor_msgs.msg import CompressedImage, PointCloud2, PointField
 from sensor_msgs import point_cloud2 as pc2
 from sensor_msgs.point_cloud2 import create_cloud
@@ -21,6 +21,12 @@ from ultralytics import YOLO
 class Perception:
     def __init__(self):
         self.xyxy = None
+
+        self.repo_folder = os.path.join(os.path.dirname(__file__), os.path.pardir)
+
+        model_path = os.path.join(self.repo_folder, "model", "best.pt")
+
+        self.model = YOLO(model_path)    # Load a trained model
 
     def knn(self, labels, points_with_labels):
         cube_centers = [] 
@@ -294,18 +300,14 @@ class Perception:
         np_arr = np.frombuffer(data.data, np.uint8)
         rgb_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR) 
 
-        repo_folder = os.path.join(os.path.dirname(__file__), os.path.pardir)
 
-        model_path = os.path.join(repo_folder, "model", "best.pt")
-
-        model = YOLO(model_path)    # Load a trained model
         source = rgb_image
-        results = model(source)                                     # return a list of Results objects
+        results = self.model(source)                                     # return a list of Results objects
 
         for i, result in enumerate(results):
             boxes = result.boxes                                    # Boxes object for bounding box outputs
             self.xyxy = boxes.xyxy
-            save_path = os.path.join(repo_folder, "test_images", f"result{i}.jpg")
+            save_path = os.path.join(self.repo_folder, "test_images", f"result{i}.jpg")
             result.save(save_path)
 
     def callback_pc(self, data):

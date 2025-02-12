@@ -28,6 +28,13 @@ class Perception:
 
         self.model = YOLO(model_path)    # Load a trained model
 
+
+        # TODO: Most of our time is spent on pre-processing. Can we speed this up?
+        # * For example:
+        # 0: 384x640 19 cubes, 1437.4ms
+        # Speed: 87.7ms preprocess, 1437.4ms inference, 1.3ms postprocess per image at shape (1, 3, 384, 640)
+
+
     def knn(self, labels, points_with_labels):
         cube_centers = [] 
         for label in np.unique(labels):

@@ -4,9 +4,10 @@ import rospy
 import open3d as o3d
 from scipy.spatial.transform import Rotation as R
 from open3d.visualization import draw_plotly
-from sensor_msgs.msg import CompressedImage, PointCloud2, PointField
+from sensor_msgs.msg import CompressedImage, Image, PointCloud2, PointField
 from sensor_msgs import point_cloud2 as pc2
 from sensor_msgs.point_cloud2 import create_cloud
+from cv_bridge import CvBridge
 from geometry_msgs.msg import Pose
 from visualization_msgs.msg import Marker
 import std_msgs.msg
@@ -18,7 +19,10 @@ from ultralytics import YOLO
 
 class Perception:
     def __init__(self):
+        self.bridge = CvBridge()
         self.xyxy = None
+        self.rgb_image = None
+        self.depth_image = None
 
     def knn(self, labels, points_with_labels):
         cube_centers = [] 
@@ -67,7 +71,7 @@ class Perception:
         previous_labels = None
         iteration = 0
 
-        while True:
+        while iteration < 20:
             closest_labels, points_with_labels = self.knn(labels, points_with_labels)
 
             if previous_labels is not None and np.array_equal(previous_labels, closest_labels):
@@ -194,29 +198,36 @@ class Perception:
 
         return markers
 
-    def filter_pc(self, point_cloud_np, bboxes):
-        if point_cloud_np.shape[1] == 4:
-            point_cloud_np = point_cloud_np[:, :3]
+    def filter_pc(self, rgb_image, depth_image, bboxes):
+        if rgb_image.shape[2] == 4:                                                                 
+            rgb_image = rgb_image[:, :, :3]
 
-        # K = [527.2972398956961, 0.0, 658.8206787109375, 0.0, 527.2972398956961, 372.25787353515625, 0.0, 0.0, 1.0]
-        # fx, fy = K[0], K[4]
-        # cx_cam, cy_cam = K[2], K[5]
-        fx, fy = 527.2972398956961, 527.2972398956961
-        cx_cam, cy_cam = 640, 360
+        K = [527.2972398956961, 0.0, 658.8206787109375, 0.0, 527.2972398956961, 372.25787353515625, 0.0, 0.0, 1.0]
+        fx, fy = K[0], K[4]
+        cx_cam, cy_cam = K[2], K[5]
+        # fx, fy = 527.2972398956961, 527.2972398956961
+        # cx_cam, cy_cam = 640, 360
+        # depth_image = depth_image / 2500.0   # maybe will be used in real world
 
         bboxes_ = bboxes.cpu().numpy()
         filtered_points = []
         labels = [] 
         for i, bbox in enumerate(bboxes_):  
-            x1, y1, x2, y2 = bbox
+            x1, y1, x2, y2 = map(int, bbox)
 
-            X, Y, Z = point_cloud_np[:, 0], point_cloud_np[:, 1], point_cloud_np[:, 2]
-            u = (X * fx / Z) + cx_cam
-            v = (Y * fy / Z) + cy_cam
+            depth_patch = depth_image[y1:y2, x1:x2]
+            # rgb_patch = rgb_image[y1:y2, x1:x2, :]
+            
+            u, v = np.meshgrid(np.arange(x1, x2), np.arange(y1, y2))
+            Z = depth_patch
+            X = (u - cx_cam) * Z / fx
+            Y = (v - cy_cam) * Z / fy
 
-            in_bbox = (u >= x1) & (u <= x2) & (v >= y1) & (v <= y2)
-            filtered_points.append(point_cloud_np[in_bbox])
-            labels.append(np.full((np.sum(in_bbox), 1), i + 1))  # Assign bbox labels to points, starting from 1
+            points = np.stack((X, Y, Z), axis=-1).reshape(-1, 3)                       # external calibration
+            # colors = rgb_patch.reshape(-1, 3) / 255.0
+
+            filtered_points.append(points)
+            labels.append(np.full((points.shape[0], 1), i + 1))  # Assign bbox labels to points, starting from 1
 
         filtered_points = np.vstack(filtered_points)
         labels = np.vstack(labels)
@@ -290,10 +301,10 @@ class Perception:
 
     def callback_rgb(self, data):
         np_arr = np.frombuffer(data.data, np.uint8)
-        rgb_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR) 
+        self.rgb_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR) 
    
         model = YOLO("/opt/ros_ws/src/perception/model/best.pt")    # Load a trained model
-        source = rgb_image
+        source = self.rgb_image
         results = model(source)                                     # return a list of Results objects
 
         for result in results:
@@ -303,12 +314,11 @@ class Perception:
 
     def callback_pc(self, data):
         # subscribe
-        pc_data = pc2.read_points(data, field_names=("x", "y", "z"), skip_nans=True)
-        point_cloud_np = np.array(list(pc_data))
+        self.depth_image = self.bridge.imgmsg_to_cv2(data, desired_encoding="passthrough")
 
         # publish
         if self.xyxy is not None:
-            filtered_points_with_labels, label_stats = self.filter_pc(point_cloud_np, self.xyxy)
+            filtered_points_with_labels, label_stats = self.filter_pc(self.rgb_image, self.depth_image, self.xyxy)
             
             # create a PointCloud2 Message
             filtered_points_np = filtered_points_with_labels[:, :3]
@@ -359,8 +369,10 @@ def perception():
     rospy.init_node('perception', anonymous=True)
     rospy.Subscriber("/zed2/zed_node/left/image_rect_color/compressed",
         CompressedImage, perception.callback_rgb,  queue_size = 1)
-    rospy.Subscriber("/zed2/zed_node/point_cloud/cloud_registered",
-        PointCloud2, perception.callback_pc,  queue_size = 10)
+    rospy.Subscriber("/zed2/zed_node/depth/depth_registered",
+        Image, perception.callback_pc,  queue_size = 10)
+    # rospy.Subscriber("/zed2/zed_node/point_cloud/cloud_registered",
+    #     PointCloud2, perception.callback_pc,  queue_size = 10)
     
     global pub_pointcloud, pub_cube_pose
     pub_pointcloud = rospy.Publisher('filtered_point_cloud', PointCloud2, queue_size=10)

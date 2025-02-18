@@ -359,6 +359,8 @@ class Perception:
                 pose.orientation.z = quaternion[2]
                 pose.orientation.w = quaternion[3]
                 
+
+                
                 pose_array.poses.append(pose)
             
             pub_cube_pose.publish(pose_array)

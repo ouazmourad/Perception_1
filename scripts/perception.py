@@ -7,13 +7,18 @@ from scipy.spatial.transform import Rotation as R
 # from open3d.visualization import draw_plotly
 from sensor_msgs.msg import CompressedImage, PointCloud2, PointField
 from sensor_msgs import point_cloud2 as pc2
+import sensor_msgs.msg
 from sensor_msgs.point_cloud2 import create_cloud
+from std_msgs.msg import Float64MultiArray
 from geometry_msgs.msg import Pose
 from visualization_msgs.msg import Marker
 import std_msgs.msg
 from matplotlib import colormaps
 import tf.transformations as tft
 from geometry_msgs.msg import Pose, PoseArray
+import sensor_msgs
+
+from tf import TransformListener
 
 import matplotlib.pyplot as plt
 
@@ -25,12 +30,21 @@ from ultralytics import YOLO
 class Perception:
     def __init__(self):
         self.xyxy = None
+        self.tf_translation = None
+        self.tf_rotation = None
+
+        #  self._tf_buffer = tf2_ros.Buffer()
+        self._tf_listener = TransformListener()
+        self._source_frame = "world"
+        self._target_frame = "zed2_left_camera_frame"
 
         self.repo_folder = os.path.join(os.path.dirname(__file__), os.path.pardir)
 
         model_path = os.path.join(self.repo_folder, "model", "best.pt")
 
+        rospy.loginfo("Loading YOLO Model ...")
         self.model = YOLO(model_path)  # Load a trained model
+        rospy.loginfo("Finished loading YOLO Model.")
 
         # TODO: Most of our time is spent on inference. Can we speed this up?
         # * For example:
@@ -155,69 +169,6 @@ class Perception:
 
         return x_axis, y_axis, z_axis
 
-    # draw cube axes in RViz
-    def create_axis_markers(self, pose, marker_id_start, frame_id="map"):
-        markers = []
-        arrow_length = 0.5
-        arrow_diameter = 0.05
-
-        # --- X-axis(red) ---
-        marker_x = Marker()
-        marker_x.header.frame_id = frame_id
-        marker_x.type = Marker.ARROW
-        marker_x.action = Marker.ADD
-        marker_x.id = marker_id_start
-        marker_x.pose = pose
-        marker_x.scale.x = arrow_length
-        marker_x.scale.y = arrow_diameter
-        marker_x.scale.z = arrow_diameter
-        marker_x.color.r = 1.0
-        marker_x.color.a = 1.0
-
-        markers.append(marker_x)
-
-        # --- Y-axis(green) ---
-        marker_y = Marker()
-        marker_y.header.frame_id = frame_id
-        marker_y.type = Marker.ARROW
-        marker_y.action = Marker.ADD
-        marker_y.id = marker_id_start + 1
-        marker_y.pose = pose
-        marker_y.scale.x = arrow_length
-        marker_y.scale.y = arrow_diameter
-        marker_y.scale.z = arrow_diameter
-        marker_y.color.g = 1.0
-        marker_y.color.a = 1.0
-
-        quat_y = tft.quaternion_from_euler(0, 0, 1.5708)
-        marker_y.pose.orientation.x = quat_y[0]
-        marker_y.pose.orientation.y = quat_y[1]
-        marker_y.pose.orientation.z = quat_y[2]
-        marker_y.pose.orientation.w = quat_y[3]
-        markers.append(marker_y)
-
-        # --- Z-axis(blue) ---
-        marker_z = Marker()
-        marker_z.header.frame_id = frame_id
-        marker_z.type = Marker.ARROW
-        marker_z.action = Marker.ADD
-        marker_z.id = marker_id_start + 2
-        marker_z.pose = pose
-        marker_z.scale.x = arrow_length
-        marker_z.scale.y = arrow_diameter
-        marker_z.scale.z = arrow_diameter
-        marker_z.color.b = 1.0
-        marker_z.color.a = 1.0
-
-        quat_z = tft.quaternion_from_euler(0, -1.5708, 0)
-        marker_z.pose.orientation.x = quat_z[0]
-        marker_z.pose.orientation.y = quat_z[1]
-        marker_z.pose.orientation.z = quat_z[2]
-        marker_z.pose.orientation.w = quat_z[3]
-        markers.append(marker_z)
-
-        return markers
-
     def filter_pc(self, point_cloud_np, bboxes):
         if point_cloud_np.shape[1] == 4:
             # Remove labels from the pointcloud
@@ -273,15 +224,43 @@ class Perception:
 
         # calibration
 
+        # extrinsic_rotation_init = R.from_quat([0.500, -0.500, 0.500, 0.500]).as_matrix()
+        # extrinsic_rotation = R.from_quat(
+        #     [0.805, -0.022, -0.593, -0.005]
+        # ).as_matrix()  # rosrun tf tf_echo world zed2_left_camera_frame
+        # extrinsic_translation = np.array([0.380, -0.011, 0.364])
+        # points_base_frame = (extrinsic_rotation_init.T @ filtered_points[:, :3].T).T
+        # points_base_frame = (
+        #     extrinsic_rotation.T @ points_base_frame[:, :3].T
+        # ).T + extrinsic_translation
+
+        t = self._tf_listener.getLatestCommonTime(
+            self._source_frame, self._target_frame
+        )
+        trans = self._tf_listener.lookupTransform(
+            self._source_frame, self._target_frame, t
+        )
+
+        # print(trans.transform)
+
+        translation = trans[0]
+        rotation = trans[1]
+
         extrinsic_rotation_init = R.from_quat([0.500, -0.500, 0.500, 0.500]).as_matrix()
-        extrinsic_rotation = R.from_quat([0.772, 0.002, -0.635, -0.009]).as_matrix()
-        extrinsic_translation = np.array([0.191, -0.061, 0.570])
+        extrinsic_rotation = R.from_quat(
+            rotation
+        ).as_matrix()  # rosrun tf tf_echo world zed2_left_camera_frame
+        extrinsic_translation = np.array(translation)
         points_base_frame = (extrinsic_rotation_init.T @ filtered_points[:, :3].T).T
         points_base_frame = (
             extrinsic_rotation.T @ points_base_frame[:, :3].T
         ).T + extrinsic_translation
 
-        valid_mask = points_base_frame[:, 2] > 0.025
+        # valid_mask = (points_base_frame[:, 0] > 0.00) and (
+        #     points_base_frame[:, 0] < 0.81
+        # )
+        # valid_mask = points_base_frame[:, 1] > -0.45 and points_base_frame[:, 1] < 0.45
+        valid_mask = points_base_frame[:, 2] > 0.03
         # valid_mask = points_base_frame[:, 2] < 0.58
 
         points_base_frame = points_base_frame[valid_mask]
@@ -326,9 +305,9 @@ class Perception:
             midpoint2_x = (x_for_ymax + x_for_ymin) / 2
             midpoint2_y = (ymax + ymin) / 2
             midpoint_x = (midpoint1_x + midpoint2_x) / 2
-            midpoint_y = (midpoint1_y + midpoint2_y) / 2
+            midpoint_y = (midpoint1_y + midpoint2_y) / 2 + 0.004
             # midpoint_z = zmax / 2
-            midpoint_z = (zmax + zmin) / 2
+            midpoint_z = (zmax + zmin) / 2 - 0.015
 
             yaw = self.calculate_angle(
                 x1=xmin, y1=y_for_xmin, x2=x_for_ymax, y2=ymax, x3=0, y3=0, x4=1, y4=0
@@ -401,6 +380,9 @@ class Perception:
 
         # labels = np.ones((point_cloud_np.shape[0], 1))
         # new_pc = np.hstack((point_cloud_np, labels))
+
+        #   <node pkg="tf" type="static_transform_publisher" name="camera_link_broadcaster"
+        # args="-0.115 0.056 0.018  -0.09 -1.25 0.075 panda_hand zed2_left_camera_frame 100" />
 
         extrinsic_rotation = R.from_quat([0.500, -0.500, 0.500, 0.500]).as_matrix()
         extrinsic_translation = np.array([0.00, 0.00, 0.00])
@@ -501,11 +483,22 @@ class Perception:
 
             pub_cube_pose.publish(pose_array)
 
+    def tf_translation_callback(self, msg):
+        self.tf_translation = msg.data
+        print(f"Translation: {self.tf_translation}")
+
+    def tf_rotation_callback(self, msg):
+        self.tf_rotation = msg.data
+        print(f"Rotation: {self.tf_rotation}")
+
 
 def perception():
+
+    # rospy.set_param("use_sim_time", True)
+    rospy.init_node("perception", anonymous=False)
+
     perception = Perception()
 
-    rospy.init_node("perception", anonymous=False)
     rospy.Subscriber(
         "/zed2/zed_node/point_cloud/cloud_registered",
         PointCloud2,
@@ -514,10 +507,17 @@ def perception():
     )
     rospy.Subscriber(
         "/zed2/zed_node/left/image_rect_color/compressed",
+        # "/zed2/zed_node/left/image_rect_color",
+        # sensor_msgs.msg.Image,
         CompressedImage,
         perception.callback_rgb,
         queue_size=1,
+        buff_size=1,
     )
+    rospy.Subscriber(
+        "/tf_translation", Float64MultiArray, perception.tf_translation_callback
+    )
+    rospy.Subscriber("/tf_rotation", Float64MultiArray, perception.tf_rotation_callback)
 
     global pub_pointcloud, pub_cube_pose
     pub_pointcloud = rospy.Publisher("filtered_point_cloud", PointCloud2, queue_size=10)

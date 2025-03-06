@@ -53,7 +53,7 @@ class Perception:
         self._tf_listener = TransformListener()
         self._source_frame = "world"
         if args_cli.sim_mode:
-            self._target_frame = "left_camera_link_optical"
+            self._target_frame = "left_camera_link"
         else:
             self._target_frame = "zed2_left_camera_frame"
 
@@ -267,24 +267,33 @@ class Perception:
         #     extrinsic_rotation.T @ points_base_frame[:, :3].T
         # ).T + extrinsic_translation
 
-        
-
-        if args_cli.sim_mode:
-            extrinsic_rotation = R.from_quat([0.658734, 0.658652, 0.257135, 0.257155]).as_matrix()
-            extrinsic_translation = np.array([0.209647, -0.0600195, 0.56205])
-            points_base_frame = (extrinsic_rotation @ filtered_points[:, :3].T).T + extrinsic_translation
-        else:
-            t = self._tf_listener.getLatestCommonTime(
+        t = self._tf_listener.getLatestCommonTime(
             self._source_frame, self._target_frame
             )
-            trans = self._tf_listener.lookupTransform(
-                self._source_frame, self._target_frame, t
-            )
+        trans = self._tf_listener.lookupTransform(
+            self._source_frame, self._target_frame, t
+        )
 
             # print(trans.transform)
 
-            translation = trans[0]
-            rotation = trans[1]
+        translation = trans[0]
+        rotation = trans[1]
+
+        if args_cli.sim_mode:
+            # extrinsic_rotation = R.from_quat([0.658734, 0.658652, 0.257135, 0.257155]).as_matrix()
+            # extrinsic_translation = np.array([0.209647, -0.0600195, 0.56205])
+            # points_base_frame = (extrinsic_rotation @ filtered_points[:, :3].T).T + extrinsic_translation
+            extrinsic_rotation_init = R.from_quat([0.500, -0.500, 0.500, 0.500]).as_matrix()
+            extrinsic_rotation = R.from_quat(
+                rotation
+            ).as_matrix()  # rosrun tf tf_echo world zed2_left_camera_frame
+            extrinsic_translation = np.array(translation)
+            points_base_frame = (extrinsic_rotation_init.T @ filtered_points[:, :3].T).T
+            points_base_frame = (
+                extrinsic_rotation.T @ points_base_frame[:, :3].T
+            ).T + extrinsic_translation
+        else:
+            
             extrinsic_rotation_init = R.from_quat([0.500, -0.500, 0.500, 0.500]).as_matrix()
             extrinsic_rotation = R.from_quat(
                 rotation

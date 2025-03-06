@@ -10,12 +10,17 @@ from geometry_msgs.msg import Pose, PoseArray
 from visualization_msgs.msg import Marker
 import std_msgs.msg
 import torch
+
+import os
+
 from some_pointpillars_library import PointPillarsModel  # Replace with actual library
 
 class Perception:
     def __init__(self):
+        self.repo_dir = os.path.join(os.path.dirname(__file__), os.path.pardir)
+        model_weights_path = os.path.join("model", "pointpillars.pth")
         self.model = PointPillarsModel()  # Load the PointPillars model
-        self.model.load_weights("/opt/ros_ws/src/perception/model/pointpillars.pth")  # Load trained model weights
+        self.model.load_weights(model_weights_path)  # Load trained model weights
         self.model.eval()
 
     def filter_pc(self, point_cloud_np):

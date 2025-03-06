@@ -1,0 +1,187 @@
+zed2 base_frame = "world"
+=> rviz shows correct pointcloud
+X,Y,Z values in pyton have -inf
+
+
+[ INFO] [1739784609.117955501]: +++ ZED Node started +++
+[ INFO] [1739784609.118068523]: Published static transform 'zed2_imu_link' -> 'zed2_left_camera_frame'
+[ INFO] [1739784609.118141864]: *** Starting Positional Tracking ***
+[ INFO] [1739784609.118185485]:  * Waiting for valid static transformations...
+[ INFO] [1739784609.118248806]: Static transform Sensor to Base [zed2_left_camera_frame -> world]
+[ INFO] [1739784609.118271996]:  * Translation: {0.221,-0.028,0.318}
+[ INFO] [1739784609.118294886]:  * Rotation: {-177.626,68.381,1.645}
+[ INFO] [1739784609.118325747]: Static transform Sensor to Camera Center [zed2_left_camera_frame -> zed2_camera_center]
+[ INFO] [1739784609.118347887]:  * Translation: {0.207,-0.028,0.312}
+[ INFO] [1739784609.118377968]:  * Rotation: {-177.890,65.519,1.358}
+[ INFO] [1739784609.118404898]: Static transform Camera Center to Base [zed2_camera_center -> world]
+[ INFO] [1739784609.118422558]:  * Translation: {0.001,0.000,-0.015}
+[ INFO] [1739784609.118440869]:  * Rotation: {0.000,-2.865,0.000}
+[ INFO] [1739784609.203004054]: Constructing new MoveGroup connection for group 'panda_arm' in namespace ''
+[ INFO] [1739784609.618525646]: Initial ZED left camera pose (ZED pos. tracking): 
+[ INFO] [1739784609.618588227]:  * T: [0.214318,-0.020941,0.32285]
+[ INFO] [1739784609.618615987]:  * Q: [0.827076,0.00028628,-0.562017,0.00906983]
+[ INFO] [1739784610.287136266]: Ready to take commands for planning group panda_arm.
+
+
+zed2 base_frame = "base_link" (default)
+=> rviz shows correct pointcloud
+X,Y,Z values in pzthon dont have -inf but Z is negative
+
+[ INFO] [1739784876.024319512]: +++ ZED Node started +++
+[ INFO] [1739784876.024405013]: *** Starting Positional Tracking ***
+[ INFO] [1739784876.024442574]:  * Waiting for valid static transformations...
+[ INFO] [1739784876.024476804]: Published static transform 'zed2_imu_link' -> 'zed2_left_camera_frame'
+[ INFO] [1739784876.048307129]: Loading robot model 'panda'...
+[ INFO] [1739784876.111199754]: Starting planning scene monitor
+[ INFO] [1739784876.112446281]: Listening to '/move_group/monitored_planning_scene'
+[ INFO] [1739784876.225388580]: Static transform Camera Center to Base [zed2_camera_center -> base_link]
+[ INFO] [1739784876.225429190]:  * Translation: {0.001,0.000,-0.015}
+[ INFO] [1739784876.225484161]:  * Rotation: {0.000,-2.865,0.000}
+[ INFO] [1739784876.352996655]: Constructing new MoveGroup connection for group 'panda_arm' in namespace ''
+[ INFO] [1739784877.461768359]: Ready to take commands for planning group panda_arm.
+[ WARN] [1739784886.541877840]:  !!! Failed to get static transforms. Is the 'ROBOT STATE PUBLISHER' node correctly working? 
+[ INFO] [1739784886.541938461]: Initial ZED left camera pose (ZED pos. tracking): 
+[ INFO] [1739784886.541982132]:  * T: [0,0,0]
+[ INFO] [1739784886.542011642]:  * Q: [0,0,0,1]
+
+
+
+zed2 base_frame = "left_camera_frame"
+=> rviz shows correct pointcloud
+X,Y,Z values in pyton have -inf
+
+[ INFO] [1739785404.192282961]: +++ ZED Node started +++
+[ INFO] [1739785404.192399853]: Published static transform 'zed2_imu_link' -> 'zed2_left_camera_frame'
+[ INFO] [1739785404.192462574]: *** Starting Positional Tracking ***
+[ INFO] [1739785404.192501764]:  * Waiting for valid static transformations...
+[ INFO] [1739785404.393976951]: Static transform Camera Center to Base [zed2_camera_center -> left_camera_frame]
+[ INFO] [1739785404.394034572]:  * Translation: {0.001,0.000,-0.015}
+[ INFO] [1739785404.394083463]:  * Rotation: {0.000,-2.865,0.000}
+[ INFO] [1739785404.400872610]: Constructing new MoveGroup connection for group 'panda_arm' in namespace ''
+[ INFO] [1739785405.519190473]: Ready to take commands for planning group panda_arm.
+[ WARN] [1739785414.711134870]:  !!! Failed to get static transforms. Is the 'ROBOT STATE PUBLISHER' node correctly working? 
+[ INFO] [1739785414.711201641]: Initial ZED left camera pose (ZED pos. tracking): 
+[ INFO] [1739785414.711254362]:  * T: [0,0,0]
+[ INFO] [1739785414.711288372]:  * Q: [0,0,0,1]
+
+
+
+zed2 base_frame = "panda_hand"
+=> rviz does NOT show correct pointcloud
+
+For frame [zed2_left_camera_frame]: No transform to fixed frame [panda_link0].  
+TF error: [Could not find a connection between 'panda_link0' and 'zed2_left_camera_frame' because they are not part of the same tree.
+Tf has two or more unconnected trees.]
+
+
+[ INFO] [1739785533.460677398]: +++ ZED Node started +++
+[ INFO] [1739785533.460778569]: *** Starting Positional Tracking ***
+[ INFO] [1739785533.460824700]: Published static transform 'zed2_imu_link' -> 'zed2_left_camera_frame'
+[ INFO] [1739785533.460868390]:  * Waiting for valid static transformations...
+[ INFO] [1739785533.460951601]: Static transform Sensor to Base [zed2_left_camera_frame -> panda_hand]
+[ INFO] [1739785533.460978462]:  * Translation: {0.008,-0.056,-0.116}
+[ INFO] [1739785533.461023502]:  * Rotation: {-0.000,77.349,-0.000}
+[ INFO] [1739785533.461068213]: Static transform Sensor to Camera Center [zed2_left_camera_frame -> zed2_camera_center]
+[ INFO] [1739785533.461118954]:  * Translation: {0.022,-0.056,-0.113}
+[ INFO] [1739785533.461151594]:  * Rotation: {-0.000,80.214,-0.000}
+[ INFO] [1739785533.461190374]: Static transform Camera Center to Base [zed2_camera_center -> panda_hand]
+[ INFO] [1739785533.461221445]:  * Translation: {0.001,0.000,-0.015}
+[ INFO] [1739785533.461251175]:  * Rotation: {0.000,-2.865,0.000}
+[ INFO] [1739785533.682342517]: Loading robot model 'panda'...
+[ INFO] [1739785533.743074567]: Starting planning scene monitor
+[ INFO] [1739785533.744402375]: Listening to '/move_group/monitored_planning_scene'
+[ INFO] [1739785533.961371414]: Initial ZED left camera pose (ZED pos. tracking): 
+[ INFO] [1739785533.961438805]:  * T: [-0.115,0.056,0.018]
+[ INFO] [1739785533.961485616]:  * Q: [0,-0.624897,8.63167e-05,0.780707]
+[ INFO] [1739785533.985173340]: Constructing new MoveGroup connection for group 'panda_arm' in namespace ''
+[ INFO] [1739785535.242754454]: Ready to take commands for planning group panda_arm.
+
+
+zed2 base_frame = "panda_hand", without the panda_hand -> left_camera transform
+=> rviz does NOT show correct pointcloud
+
+For frame [zed2_left_camera_frame]: No transform to fixed frame [panda_link0].  
+TF error: [Could not find a connection between 'panda_link0' and 'zed2_left_camera_frame' because they are not part of the same tree.
+Tf has two or more unconnected trees.]
+
+
+[ INFO] [1739785758.783832374]: +++ ZED Node started +++
+[ INFO] [1739785758.783964596]: Published static transform 'zed2_imu_link' -> 'zed2_left_camera_frame'
+[ INFO] [1739785758.784040817]: *** Starting Positional Tracking ***
+[ INFO] [1739785758.784091287]:  * Waiting for valid static transformations...
+[ INFO] [1739785758.784200889]: Static transform Sensor to Base [zed2_left_camera_frame -> panda_hand]
+[ INFO] [1739785758.784240399]:  * Translation: {0.011,-0.060,-0.015}
+[ INFO] [1739785758.784272750]:  * Rotation: {0.000,-2.865,0.000}
+[ INFO] [1739785758.784317680]: Static transform Sensor to Camera Center [zed2_left_camera_frame -> zed2_camera_center]
+[ INFO] [1739785758.784348181]:  * Translation: {0.010,-0.060,0.000}
+[ INFO] [1739785758.784384141]:  * Rotation: {0.000,-0.000,0.000}
+[ INFO] [1739785758.784442192]: Static transform Camera Center to Base [zed2_camera_center -> panda_hand]
+[ INFO] [1739785758.784473442]:  * Translation: {0.001,0.000,-0.015}
+[ INFO] [1739785758.784510373]:  * Rotation: {0.000,-2.865,0.000}
+[ INFO] [1739785759.018220238]: Constructing new MoveGroup connection for group 'panda_arm' in namespace ''
+[ INFO] [1739785759.284650699]: Initial ZED left camera pose (ZED pos. tracking): 
+[ INFO] [1739785759.284715380]:  * T: [-0.0099875,0.06,0.0154998]
+[ INFO] [1739785759.284777940]:  * Q: [0,0.0249979,0,0.999687]
+[ INFO] [1739785760.157057257]: Ready to take commands for planning group panda_arm.
+
+
+zed2 base_frame = "panda_hand", WITH panda_hand -> panda_link8 transform
+
+rviz shows pointcloud, but it is in the wrong position
+aditionallz, we are getting an error message frpm pointCloud2:
+Failed to transform from frame [zed2_left_camera_frame] to frame [panda_link0]
+
+
+
+
+
+[ INFO] [1739786014.712752032]: +++ ZED Node started +++
+[ INFO] [1739786014.712862303]: Published static transform 'zed2_imu_link' -> 'zed2_left_camera_frame'
+[ INFO] [1739786014.712938154]: *** Starting Positional Tracking ***
+[ INFO] [1739786014.712978435]:  * Waiting for valid static transformations...
+[ INFO] [1739786014.713044936]: Static transform Sensor to Base [zed2_left_camera_frame -> panda_hand]
+[ INFO] [1739786014.713067766]:  * Translation: {0.011,-0.060,-0.015}
+[ INFO] [1739786014.713088066]:  * Rotation: {0.000,-2.865,0.000}
+[ INFO] [1739786014.713120437]: Static transform Sensor to Camera Center [zed2_left_camera_frame -> zed2_camera_center]
+[ INFO] [1739786014.713142767]:  * Translation: {0.010,-0.060,0.000}
+[ INFO] [1739786014.713167377]:  * Rotation: {0.000,-0.000,0.000}
+[ INFO] [1739786014.713210528]: Static transform Camera Center to Base [zed2_camera_center -> panda_hand]
+[ INFO] [1739786014.713239528]:  * Translation: {0.001,0.000,-0.015}
+[ INFO] [1739786014.713265538]:  * Rotation: {0.000,-2.865,0.000}
+[ INFO] [1739786014.763804663]: Starting planning scene monitor
+[ INFO] [1739786014.765175051]: Listening to '/move_group/monitored_planning_scene'
+[ INFO] [1739786015.005920907]: Constructing new MoveGroup connection for group 'panda_arm' in namespace ''
+[ INFO] [1739786015.213383074]: Initial ZED left camera pose (ZED pos. tracking): 
+[ INFO] [1739786015.213458855]:  * T: [-0.0099875,0.06,0.0154998]
+[ INFO] [1739786015.213486446]:  * Q: [0,0.0249979,0,0.999687]
+[ INFO] [1739786016.134694007]: Ready to take commands for planning group panda_arm.
+
+
+
+zed2 base_frame = "base_link" (default), WITHOUT anz transformations 
+rviz is not showing a pointcloud with the following error message:
+For frame [zed2_left_camera_frame]: No transform to fixed frame [panda_link0].  
+TF error: [Could not find a connection between 'panda_link0' and 'zed2_left_camera_frame' because they are not part of the same tree.
+Tf has two or more unconnected trees.]
+
+
+[ INFO] [1739786639.593203698]: +++ ZED Node started +++
+[ INFO] [1739786639.593297410]: Published static transform 'zed2_imu_link' -> 'zed2_left_camera_frame'
+[ INFO] [1739786639.593344281]: *** Starting Positional Tracking ***
+[ INFO] [1739786639.593404143]:  * Waiting for valid static transformations...
+[ INFO] [1739786639.593483875]: Static transform Sensor to Base [zed2_left_camera_frame -> base_link]
+[ INFO] [1739786639.593523346]:  * Translation: {0.011,-0.060,-0.015}
+[ INFO] [1739786639.593560327]:  * Rotation: {0.000,-2.865,0.000}
+[ INFO] [1739786639.593609088]: Static transform Sensor to Camera Center [zed2_left_camera_frame -> zed2_camera_center]
+[ INFO] [1739786639.593647749]:  * Translation: {0.010,-0.060,0.000}
+[ INFO] [1739786639.593682000]:  * Rotation: {0.000,-0.000,0.000}
+[ INFO] [1739786639.593722251]: Static transform Camera Center to Base [zed2_camera_center -> base_link]
+[ INFO] [1739786639.593753072]:  * Translation: {0.001,0.000,-0.015}
+[ INFO] [1739786639.593781492]:  * Rotation: {0.000,-2.865,0.000}
+[ INFO] [1739786639.614724183]: Starting planning scene monitor
+[ INFO] [1739786639.615905382]: Listening to '/move_group/monitored_planning_scene'
+[ INFO] [1739786639.861007830]: Constructing new MoveGroup connection for group 'panda_arm' in namespace ''
+[ INFO] [1739786640.093899693]: Initial ZED left camera pose (ZED pos. tracking): 
+[ INFO] [1739786640.093958575]:  * T: [-0.0099875,0.06,0.0154998]
+[ INFO] [1739786640.093985115]:  * Q: [0,0.0249979,0,0.999687]
+[ INFO] [1739786641.046313778]: Ready to take commands for planning group panda_arm.

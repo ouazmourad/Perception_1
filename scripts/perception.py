@@ -3,35 +3,66 @@ import cv2
 import rospy
 import open3d as o3d
 from scipy.spatial.transform import Rotation as R
-from open3d.visualization import draw_plotly
+
+# from open3d.visualization import draw_plotly
 from sensor_msgs.msg import CompressedImage, PointCloud2, PointField
 from sensor_msgs import point_cloud2 as pc2
+import sensor_msgs.msg
 from sensor_msgs.point_cloud2 import create_cloud
+from std_msgs.msg import Float64MultiArray
 from geometry_msgs.msg import Pose
 from visualization_msgs.msg import Marker
 import std_msgs.msg
 from matplotlib import colormaps
 import tf.transformations as tft
 from geometry_msgs.msg import Pose, PoseArray
+import sensor_msgs
+
+from tf import TransformListener
+
+import matplotlib.pyplot as plt
+
+import os
 
 from ultralytics import YOLO
+
 
 class Perception:
     def __init__(self):
         self.xyxy = None
+        self.tf_translation = None
+        self.tf_rotation = None
+
+        #  self._tf_buffer = tf2_ros.Buffer()
+        self._tf_listener = TransformListener()
+        self._source_frame = "world"
+        self._target_frame = "zed2_left_camera_frame"
+
+        self.repo_folder = os.path.join(os.path.dirname(__file__), os.path.pardir)
+
+        model_path = os.path.join(self.repo_folder, "model", "best.pt")
+
+        rospy.loginfo("Loading YOLO Model ...")
+        self.model = YOLO(model_path)  # Load a trained model
+        rospy.loginfo("Finished loading YOLO Model.")
+
+        # TODO: Most of our time is spent on inference. Can we speed this up?
+        # * For example:
+        # 0: 384x640 19 cubes, 1437.4ms
+        # Speed: 87.7ms preprocess, 1437.4ms inference, 1.3ms postprocess per image at shape (1, 3, 384, 640)
 
     def knn(self, labels, points_with_labels):
-        cube_centers = [] 
+        cube_centers = []
         for label in np.unique(labels):
             points_for_label = points_with_labels[points_with_labels[:, 3] == label]
-            
+
             xmax = points_for_label[:, 0].max()
             xmin = points_for_label[:, 0].min()
             ymax = points_for_label[:, 1].max()
             ymin = points_for_label[:, 1].min()
             zmax = points_for_label[:, 2].max()
 
-            y_for_xmax = np.mean(points_for_label[points_for_label[:, 0] == xmax, 1]) 
+            y_for_xmax = np.mean(points_for_label[points_for_label[:, 0] == xmax, 1])
             y_for_xmin = np.mean(points_for_label[points_for_label[:, 0] == xmin, 1])
             x_for_ymax = np.mean(points_for_label[points_for_label[:, 1] == ymax, 0])
             x_for_ymin = np.mean(points_for_label[points_for_label[:, 1] == ymin, 0])
@@ -51,7 +82,9 @@ class Perception:
         for point_idx, point in enumerate(points_with_labels[:, :3]):
             distances = []
             for cube_idx, (cx, cy, cz) in enumerate(cube_centers):
-                dist = np.sqrt((point[0] - cx)**2 + (point[1] - cy)**2 + (point[2] - cz)**2)
+                dist = np.sqrt(
+                    (point[0] - cx) ** 2 + (point[1] - cy) ** 2 + (point[2] - cz) ** 2
+                )
                 distances.append((cube_idx + 1, dist))  # save (label, distance)
 
             # Sort by distance and select the closest label
@@ -60,214 +93,234 @@ class Perception:
             points_with_labels[point_idx, 3] = closest_label  # Update point labels
 
             closest_labels.append(closest_label)
-        
+
         return closest_labels, points_with_labels
 
     def knn_until_convergence(self, labels, points_with_labels):
         previous_labels = None
         iteration = 0
 
-        while True:
-            closest_labels, points_with_labels = self.knn(labels, points_with_labels)
+        closest_labels = labels.copy()
 
-            if previous_labels is not None and np.array_equal(previous_labels, closest_labels):
+        while True:
+            closest_labels, points_with_labels = self.knn(
+                closest_labels, points_with_labels
+            )
+
+            if previous_labels is not None and np.array_equal(
+                previous_labels, closest_labels
+            ):
                 print(f"\nConverged after {iteration} iterations.\n")
                 break
 
             previous_labels = closest_labels
             iteration += 1
+            if iteration > 100:
+                break
 
         return closest_labels, points_with_labels
 
     def calculate_angle(self, x1, y1, x2, y2, x3, y3, x4, y4):
         v1 = np.array([x2 - x1, y2 - y1])
         v2 = np.array([x4 - x3, y4 - y3])
-        
+
         dot_product = np.dot(v1, v2)
         norm_v1 = np.linalg.norm(v1)
         norm_v2 = np.linalg.norm(v2)
-        
+
         cos_theta = dot_product / (norm_v1 * norm_v2)
-        cos_theta = np.clip(cos_theta, -1, 1) 
-        
+        cos_theta = np.clip(cos_theta, -1, 1)
+
         theta = np.arccos(cos_theta)
         theta = np.degrees(theta)
-        
+
         return theta
 
     # draw cube axes in Open3D(optional)
     def cube_axes(self, x, y, z, yaw):
         translation = np.array([x, y, z])
-        rotation_matrix = R.from_euler('z', yaw, degrees=True).as_matrix() 
+        rotation_matrix = R.from_euler("z", yaw, degrees=True).as_matrix()
 
         axis_length = 0.05
 
         # --- X-axis(red) ---
         x_axis = o3d.geometry.LineSet()
-        x_axis.points = o3d.utility.Vector3dVector([
-            translation, 
-            translation + rotation_matrix[:, 0] * axis_length
-        ])
+        x_axis.points = o3d.utility.Vector3dVector(
+            [translation, translation + rotation_matrix[:, 0] * axis_length]
+        )
         x_axis.lines = o3d.utility.Vector2iVector([[0, 1]])
-        x_axis.colors = o3d.utility.Vector3dVector([[1, 0, 0]]) 
+        x_axis.colors = o3d.utility.Vector3dVector([[1, 0, 0]])
 
         # --- Y-axis(green) ---
         y_axis = o3d.geometry.LineSet()
-        y_axis.points = o3d.utility.Vector3dVector([
-            translation, 
-            translation + rotation_matrix[:, 1] * axis_length
-        ])
+        y_axis.points = o3d.utility.Vector3dVector(
+            [translation, translation + rotation_matrix[:, 1] * axis_length]
+        )
         y_axis.lines = o3d.utility.Vector2iVector([[0, 1]])
         y_axis.colors = o3d.utility.Vector3dVector([[0, 1, 0]])
 
         # --- Z-axis(blue) ---
         z_axis = o3d.geometry.LineSet()
-        z_axis.points = o3d.utility.Vector3dVector([
-            translation, 
-            translation + rotation_matrix[:, 2] * axis_length
-        ])
+        z_axis.points = o3d.utility.Vector3dVector(
+            [translation, translation + rotation_matrix[:, 2] * axis_length]
+        )
         z_axis.lines = o3d.utility.Vector2iVector([[0, 1]])
-        z_axis.colors = o3d.utility.Vector3dVector([[0, 0, 1]])  
+        z_axis.colors = o3d.utility.Vector3dVector([[0, 0, 1]])
 
         return x_axis, y_axis, z_axis
 
-    # draw cube axes in RViz
-    def create_axis_markers(self, pose, marker_id_start, frame_id="map"):
-        markers = []
-        arrow_length = 0.5
-        arrow_diameter = 0.05
-
-        # --- X-axis(red) ---
-        marker_x = Marker()
-        marker_x.header.frame_id = frame_id
-        marker_x.type = Marker.ARROW
-        marker_x.action = Marker.ADD
-        marker_x.id = marker_id_start
-        marker_x.pose = pose
-        marker_x.scale.x = arrow_length
-        marker_x.scale.y = arrow_diameter
-        marker_x.scale.z = arrow_diameter
-        marker_x.color.r = 1.0
-        marker_x.color.a = 1.0
-
-        markers.append(marker_x)
-
-        # --- Y-axis(green) ---
-        marker_y = Marker()
-        marker_y.header.frame_id = frame_id
-        marker_y.type = Marker.ARROW
-        marker_y.action = Marker.ADD
-        marker_y.id = marker_id_start + 1
-        marker_y.pose = pose
-        marker_y.scale.x = arrow_length
-        marker_y.scale.y = arrow_diameter
-        marker_y.scale.z = arrow_diameter
-        marker_y.color.g = 1.0
-        marker_y.color.a = 1.0
-
-        quat_y = tft.quaternion_from_euler(0, 0, 1.5708)
-        marker_y.pose.orientation.x = quat_y[0]
-        marker_y.pose.orientation.y = quat_y[1]
-        marker_y.pose.orientation.z = quat_y[2]
-        marker_y.pose.orientation.w = quat_y[3]
-        markers.append(marker_y)
-
-        # --- Z-axis(blue) ---
-        marker_z = Marker()
-        marker_z.header.frame_id = frame_id
-        marker_z.type = Marker.ARROW
-        marker_z.action = Marker.ADD
-        marker_z.id = marker_id_start + 2
-        marker_z.pose = pose
-        marker_z.scale.x = arrow_length
-        marker_z.scale.y = arrow_diameter
-        marker_z.scale.z = arrow_diameter
-        marker_z.color.b = 1.0
-        marker_z.color.a = 1.0
-
-        quat_z = tft.quaternion_from_euler(0, -1.5708, 0)
-        marker_z.pose.orientation.x = quat_z[0]
-        marker_z.pose.orientation.y = quat_z[1]
-        marker_z.pose.orientation.z = quat_z[2]
-        marker_z.pose.orientation.w = quat_z[3]
-        markers.append(marker_z)
-
-        return markers
-
     def filter_pc(self, point_cloud_np, bboxes):
         if point_cloud_np.shape[1] == 4:
+            # Remove labels from the pointcloud
             point_cloud_np = point_cloud_np[:, :3]
 
+        # fx, fy = 527.2972398956961, 527.2972398956961
+        # cx_cam, cy_cam = 640, 360
         # K = [527.2972398956961, 0.0, 658.8206787109375, 0.0, 527.2972398956961, 372.25787353515625, 0.0, 0.0, 1.0]
-        # fx, fy = K[0], K[4]
+        K = [
+            260.6392822265625,
+            0.0,
+            315.3443298339844,
+            0.0,
+            260.6392822265625,
+            184.0966033935547,
+            0.0,
+            0.0,
+            1.0,
+        ]
+        fx, fy = K[0], K[4]
         # cx_cam, cy_cam = K[2], K[5]
-        fx, fy = 527.2972398956961, 527.2972398956961
-        cx_cam, cy_cam = 640, 360
+        # cx_cam, cy_cam = 640, 360
+        cx_cam, cy_cam = 320, 180
 
         bboxes_ = bboxes.cpu().numpy()
         filtered_points = []
-        labels = [] 
-        for i, bbox in enumerate(bboxes_):  
+        labels = []
+        # TODO: need failsafe for when bboxes_ arraz is empty
+        if len(bboxes_) == 0:
+            return
+        for i, bbox in enumerate(bboxes_):
             x1, y1, x2, y2 = bbox
 
             X, Y, Z = point_cloud_np[:, 0], point_cloud_np[:, 1], point_cloud_np[:, 2]
+
+            # u = X / Z
+            # u = u * fx
+            # u = u + cx_cam
             u = (X * fx / Z) + cx_cam
             v = (Y * fy / Z) + cy_cam
 
             in_bbox = (u >= x1) & (u <= x2) & (v >= y1) & (v <= y2)
             filtered_points.append(point_cloud_np[in_bbox])
-            labels.append(np.full((np.sum(in_bbox), 1), i + 1))  # Assign bbox labels to points, starting from 1
+            labels.append(
+                np.full((np.sum(in_bbox), 1), i + 1)
+            )  # Assign bbox labels to points, starting from 1
 
         filtered_points = np.vstack(filtered_points)
         labels = np.vstack(labels)
-        filtered_points = np.hstack((filtered_points, labels))  # Add labels as a fourth column
+        filtered_points = np.hstack(
+            (filtered_points, labels)
+        )  # Add labels as a fourth column
 
         # calibration
-        extrinsic_rotation = R.from_quat([0.658734, 0.658652, 0.257135, 0.257155]).as_matrix()
-        extrinsic_translation = np.array([0.209647, -0.0600195, 0.56205])
-        points_base_frame = (extrinsic_rotation @ filtered_points[:, :3].T).T + extrinsic_translation
-        valid_mask = points_base_frame[:, 2] > 0.0005  
+
+        # extrinsic_rotation_init = R.from_quat([0.500, -0.500, 0.500, 0.500]).as_matrix()
+        # extrinsic_rotation = R.from_quat(
+        #     [0.805, -0.022, -0.593, -0.005]
+        # ).as_matrix()  # rosrun tf tf_echo world zed2_left_camera_frame
+        # extrinsic_translation = np.array([0.380, -0.011, 0.364])
+        # points_base_frame = (extrinsic_rotation_init.T @ filtered_points[:, :3].T).T
+        # points_base_frame = (
+        #     extrinsic_rotation.T @ points_base_frame[:, :3].T
+        # ).T + extrinsic_translation
+
+        t = self._tf_listener.getLatestCommonTime(
+            self._source_frame, self._target_frame
+        )
+        trans = self._tf_listener.lookupTransform(
+            self._source_frame, self._target_frame, t
+        )
+
+        # print(trans.transform)
+
+        translation = trans[0]
+        rotation = trans[1]
+
+        extrinsic_rotation_init = R.from_quat([0.500, -0.500, 0.500, 0.500]).as_matrix()
+        extrinsic_rotation = R.from_quat(
+            rotation
+        ).as_matrix()  # rosrun tf tf_echo world zed2_left_camera_frame
+        extrinsic_translation = np.array(translation)
+        points_base_frame = (extrinsic_rotation_init.T @ filtered_points[:, :3].T).T
+        points_base_frame = (
+            extrinsic_rotation.T @ points_base_frame[:, :3].T
+        ).T + extrinsic_translation
+
+        # valid_mask = (points_base_frame[:, 0] > 0.00) and (
+        #     points_base_frame[:, 0] < 0.81
+        # )
+        # valid_mask = points_base_frame[:, 1] > -0.45 and points_base_frame[:, 1] < 0.45
+        valid_mask = points_base_frame[:, 2] > 0.03
+        # valid_mask = points_base_frame[:, 2] < 0.58
 
         points_base_frame = points_base_frame[valid_mask]
-        labels = filtered_points[valid_mask, 3:4]  
+        labels = filtered_points[valid_mask, 3:4]
         points_with_labels = np.hstack((points_base_frame, labels))
-        
+
         ### cube pose ###
-        closest_labels, points_with_labels = self.knn_until_convergence(labels, points_with_labels)
-    
+        closest_labels, points_with_labels = self.knn_until_convergence(
+            labels, points_with_labels
+        )
+
         # calculate accurate translation and rotation, draw coordinate axes
-        label_stats = {} 
+        label_stats = {}
         axes = []
         for closest_label in np.unique(closest_labels):
-            points_for_closest_label = points_with_labels[points_with_labels[:, 3] == closest_label]
-            
+            points_for_closest_label = points_with_labels[
+                points_with_labels[:, 3] == closest_label
+            ]
+
             xmax = points_for_closest_label[:, 0].max()
             xmin = points_for_closest_label[:, 0].min()
             ymax = points_for_closest_label[:, 1].max()
             ymin = points_for_closest_label[:, 1].min()
+            zmin = points_for_closest_label[:, 2].min()
             zmax = points_for_closest_label[:, 2].max()
 
-            y_for_xmax = np.mean(points_for_closest_label[points_for_closest_label[:, 0] == xmax, 1]) 
-            y_for_xmin = np.mean(points_for_closest_label[points_for_closest_label[:, 0] == xmin, 1])
-            x_for_ymax = np.mean(points_for_closest_label[points_for_closest_label[:, 1] == ymax, 0])
-            x_for_ymin = np.mean(points_for_closest_label[points_for_closest_label[:, 1] == ymin, 0])
+            y_for_xmax = np.mean(
+                points_for_closest_label[points_for_closest_label[:, 0] == xmax, 1]
+            )
+            y_for_xmin = np.mean(
+                points_for_closest_label[points_for_closest_label[:, 0] == xmin, 1]
+            )
+            x_for_ymax = np.mean(
+                points_for_closest_label[points_for_closest_label[:, 1] == ymax, 0]
+            )
+            x_for_ymin = np.mean(
+                points_for_closest_label[points_for_closest_label[:, 1] == ymin, 0]
+            )
 
             midpoint1_x = (xmax + xmin) / 2
             midpoint1_y = (y_for_xmax + y_for_xmin) / 2
             midpoint2_x = (x_for_ymax + x_for_ymin) / 2
             midpoint2_y = (ymax + ymin) / 2
             midpoint_x = (midpoint1_x + midpoint2_x) / 2
-            midpoint_y = (midpoint1_y + midpoint2_y) / 2
-            midpoint_z = zmax / 2
+            midpoint_y = (midpoint1_y + midpoint2_y) / 2 + 0.004
+            # midpoint_z = zmax / 2
+            midpoint_z = (zmax + zmin) / 2 - 0.015
 
-            yaw = self.calculate_angle(x1=xmin, y1=y_for_xmin, x2=x_for_ymax, y2=ymax, x3=0, y3=0, x4=1, y4=0)
+            yaw = self.calculate_angle(
+                x1=xmin, y1=y_for_xmin, x2=x_for_ymax, y2=ymax, x3=0, y3=0, x4=1, y4=0
+            )
 
             label_stats[closest_label] = {
                 "translation": (midpoint_x, midpoint_y, midpoint_z),
-                "rotation": (0, 0, yaw)
+                "rotation": (0, 0, yaw),
             }
-            
-            x_axis, y_axis, z_axis = self.cube_axes(midpoint_x, midpoint_y, midpoint_z, yaw)
+
+            x_axis, y_axis, z_axis = self.cube_axes(
+                midpoint_x, midpoint_y, midpoint_z, yaw
+            )
             axes.extend([x_axis, y_axis, z_axis])
 
         for label, stats in label_stats.items():
@@ -277,97 +330,202 @@ class Perception:
 
         point_cloud = o3d.geometry.PointCloud()
         point_cloud.points = o3d.utility.Vector3dVector(points_with_labels[:, :3])
-        
+
         # Assign a color to each point
         colors = colormaps["tab10"]
-        point_colors = np.array([colors(int(label) % 10)[:3] for label in points_with_labels[:, 3]])  
+        point_colors = np.array(
+            [colors(int(label) % 10)[:3] for label in points_with_labels[:, 3]]
+        )
         point_cloud.colors = o3d.utility.Vector3dVector(point_colors)
 
-        o3d.visualization.draw_geometries([point_cloud] + axes)
+        # o3d.visualization.draw_geometries([point_cloud] + axes)
         # draw_plotly([point_cloud] + axes)
 
         return points_with_labels, label_stats
 
     def callback_rgb(self, data):
         np_arr = np.frombuffer(data.data, np.uint8)
-        rgb_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR) 
-   
-        model = YOLO("/opt/ros_ws/src/perception/model/best.pt")    # Load a trained model
+        rgb_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
         source = rgb_image
-        results = model(source)                                     # return a list of Results objects
+        results = self.model(source)  # return a list of Results objects
 
-        for result in results:
-            boxes = result.boxes                                    # Boxes object for bounding box outputs
+        for i, result in enumerate(results):
+            boxes = result.boxes  # Boxes object for bounding box outputs
             self.xyxy = boxes.xyxy
-            result.save("/opt/ros_ws/src/perception/test_images/result0.jpg")
+            save_path = os.path.join(self.repo_folder, "test_images", f"result{i}.jpg")
+            result.save(save_path)
 
-    def callback_pc(self, data):
-        # subscribe
+    def callback_pc(self, data: PointCloud2):
+        # subscribe'
         pc_data = pc2.read_points(data, field_names=("x", "y", "z"), skip_nans=True)
-        point_cloud_np = np.array(list(pc_data))
+
+        # ! We can use uvs parameter to only read pointcloud data at given coordinates
+        # @param uvs: If specified, then only return the points at the given coordinates. [default: empty list]
+        # @type  uvs: iterable
+
+        # transform from zed2_left_camera_optical_frame to base_link while disconnected from panda
+        # - Translation: [0.060, 0.015, 0.011]
+        # - Rotation: in Quaternion [0.512, -0.512, 0.487, 0.487]
+        # in RPY (radian) [3.142, -1.521, -1.571]
+        # in RPY (degree) [180.000, -87.135, -90.000]
+
+        point_cloud_list = list(pc_data)
+        point_cloud_np = np.array(point_cloud_list)  # .clip(0.3, 15.0)
+        # * Sanity check to see if reading the pointcloud and publishing it is destroying something
+        # works fine
+
+        # plt.hist(point_cloud_np[:, 2].clip(-150.0, 150.0))
+        # plt.savefig("tmp.png")
+
+        # labels = np.ones((point_cloud_np.shape[0], 1))
+        # new_pc = np.hstack((point_cloud_np, labels))
+
+        #   <node pkg="tf" type="static_transform_publisher" name="camera_link_broadcaster"
+        # args="-0.115 0.056 0.018  -0.09 -1.25 0.075 panda_hand zed2_left_camera_frame 100" />
+
+        extrinsic_rotation = R.from_quat([0.500, -0.500, 0.500, 0.500]).as_matrix()
+        extrinsic_translation = np.array([0.00, 0.00, 0.00])
+        point_cloud_np = (
+            extrinsic_rotation @ point_cloud_np[:, :3].T
+        ).T - extrinsic_translation
+
+        # X2, Y2, Z2 = point_cloud_np[:, 0], point_cloud_np[:, 1], point_cloud_np[:, 2]
+
+        # new_pc = point_cloud_np
+
+        # point_cloud_np[:, 2] = point_cloud_np[:, 2].clip(0.0, 20.0)
+
+        # header = std_msgs.msg.Header()
+        # header.stamp = rospy.Time.now()
+        # header.frame_id = "zed2_left_camera_optical_frame"
+        # # header.frame_id = "zed2_left_camera_frame"
+
+        # fields = [
+        #     PointField("x", 0, PointField.FLOAT32, 1),
+        #     PointField("y", 4, PointField.FLOAT32, 1),
+        #     PointField("z", 8, PointField.FLOAT32, 1),
+        #     # PointField("label", 12, PointField.INT8, 1),
+        # ]
+
+        # cloud_data = create_cloud(
+        #     header=header,
+        #     fields=fields,
+        #     points=new_pc,
+        # )
+
+        # new_pointcloud = PointCloud2(cloud_data)
+
+        #  pub_pointcloud.publish(cloud_data)
+
+        # point_cloud = o3d.geometry.PointCloud()
+        # point_cloud.points = o3d.utility.Vector3dVector(point_cloud_np)
+
+        # o3d.visualization.draw_geometries([point_cloud])
+
+        # X1, Y1, Z1 = point_cloud_np[:, 0], point_cloud_np[:, 1], point_cloud_np[:, 2]
+
+        # combined_points = np.hstack((filtered_points_np, labels_np.reshape(-1, 1)))
+        # point_cloud_msg = create_cloud(header, fields, combined_points)
+
+        # pub_pointcloud.publish(point_cloud_msg)
 
         # publish
-        if self.xyxy is not None:
-            filtered_points_with_labels, label_stats = self.filter_pc(point_cloud_np, self.xyxy)
-            
+
+        if self.xyxy is not None and len(self.xyxy) > 0:
+            print("run filter_pc")
+            filtered_points_with_labels, label_stats = self.filter_pc(
+                point_cloud_np, self.xyxy
+            )
+
             # create a PointCloud2 Message
             filtered_points_np = filtered_points_with_labels[:, :3]
             labels_np = filtered_points_with_labels[:, 3]
-            
+
             header = std_msgs.msg.Header()
             header.stamp = rospy.Time.now()
+            # header.frame_id = "zed2_left_camera_optical_frame"
             header.frame_id = "world"
-            
+
             fields = [
-                PointField('x', 0, PointField.FLOAT32, 1),
-                PointField('y', 4, PointField.FLOAT32, 1),
-                PointField('z', 8, PointField.FLOAT32, 1),
-                PointField('label', 12, PointField.FLOAT32, 1),  
+                PointField("x", 0, PointField.FLOAT32, 1),
+                PointField("y", 4, PointField.FLOAT32, 1),
+                PointField("z", 8, PointField.FLOAT32, 1),
+                PointField("label", 12, PointField.FLOAT32, 1),
             ]
-            
+
             combined_points = np.hstack((filtered_points_np, labels_np.reshape(-1, 1)))
             point_cloud_msg = create_cloud(header, fields, combined_points)
-            
-            pub_pointcloud.publish(point_cloud_msg)  
+
+            pub_pointcloud.publish(point_cloud_msg)
 
             # create a PoseArray Message
             pose_array = PoseArray()
+            # pose_array.header.frame_id = "zed2_left_camera_optical_frame"
             pose_array.header.frame_id = "world"
 
             for label, stats in label_stats.items():
                 pose = Pose()
-                translation = stats['translation']
-                rotation = stats['rotation']
-                
+                translation = stats["translation"]
+                rotation = stats["rotation"]
+
                 pose.position.x = translation[0]
                 pose.position.y = translation[1]
                 pose.position.z = translation[2]
-                
-                quaternion = R.from_euler('xyz', rotation, degrees=True).as_quat()
+
+                quaternion = R.from_euler("xyz", rotation, degrees=True).as_quat()
                 pose.orientation.x = quaternion[0]
                 pose.orientation.y = quaternion[1]
                 pose.orientation.z = quaternion[2]
                 pose.orientation.w = quaternion[3]
-                
+
                 pose_array.poses.append(pose)
-            
+
             pub_cube_pose.publish(pose_array)
 
+    def tf_translation_callback(self, msg):
+        self.tf_translation = msg.data
+        print(f"Translation: {self.tf_translation}")
+
+    def tf_rotation_callback(self, msg):
+        self.tf_rotation = msg.data
+        print(f"Rotation: {self.tf_rotation}")
+
+
 def perception():
+
+    # rospy.set_param("use_sim_time", True)
+    rospy.init_node("perception", anonymous=False)
+
     perception = Perception()
 
-    rospy.init_node('perception', anonymous=True)
-    rospy.Subscriber("/zed2/zed_node/left/image_rect_color/compressed",
-        CompressedImage, perception.callback_rgb,  queue_size = 1)
-    rospy.Subscriber("/zed2/zed_node/point_cloud/cloud_registered",
-        PointCloud2, perception.callback_pc,  queue_size = 10)
-    
+    rospy.Subscriber(
+        "/zed2/zed_node/point_cloud/cloud_registered",
+        PointCloud2,
+        perception.callback_pc,
+        queue_size=10,
+    )
+    rospy.Subscriber(
+        "/zed2/zed_node/left/image_rect_color/compressed",
+        # "/zed2/zed_node/left/image_rect_color",
+        # sensor_msgs.msg.Image,
+        CompressedImage,
+        perception.callback_rgb,
+        queue_size=1,
+        buff_size=1,
+    )
+    rospy.Subscriber(
+        "/tf_translation", Float64MultiArray, perception.tf_translation_callback
+    )
+    rospy.Subscriber("/tf_rotation", Float64MultiArray, perception.tf_rotation_callback)
+
     global pub_pointcloud, pub_cube_pose
-    pub_pointcloud = rospy.Publisher('filtered_point_cloud', PointCloud2, queue_size=10)
-    pub_cube_pose = rospy.Publisher('cube_pose', PoseArray, queue_size=10)
-    
+    pub_pointcloud = rospy.Publisher("filtered_point_cloud", PointCloud2, queue_size=10)
+    pub_cube_pose = rospy.Publisher("cube_pose", PoseArray, queue_size=10)
+
     rospy.spin()
     cv2.destroyAllWindows()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     perception()

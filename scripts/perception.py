@@ -379,7 +379,7 @@ class Perception:
         )
         point_cloud.colors = o3d.utility.Vector3dVector(point_colors)
 
-        o3d.visualization.draw_geometries([point_cloud] + axes)
+        # o3d.visualization.draw_geometries([point_cloud] + axes)
         # draw_plotly([point_cloud] + axes)
 
         return points_with_labels, label_stats

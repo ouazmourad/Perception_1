@@ -1,0 +1,6 @@
+# No input parameters, leave blank
+---
+
+# Response fields (what the service returns)
+sensor_msgs/PointCloud2 pointcloud
+geometry_msgs/PoseArray cubeposes

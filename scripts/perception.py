@@ -3,6 +3,8 @@ import cv2
 import rospy
 import open3d as o3d
 from scipy.spatial.transform import Rotation as R
+from sklearn.decomposition import PCA
+
 
 # from open3d.visualization import draw_plotly
 from sensor_msgs.msg import CompressedImage, PointCloud2, PointField
@@ -18,6 +20,8 @@ import tf.transformations as tft
 from geometry_msgs.msg import Pose, PoseArray
 import sensor_msgs
 
+from irobman_project_lab_perception.srv import GetCubePoseEstimates, GetCubePoseEstimatesResponse
+
 from tf import TransformListener
 
 import matplotlib.pyplot as plt
@@ -26,6 +30,20 @@ import os
 
 from ultralytics import YOLO
 
+import argparse
+
+parser = argparse.ArgumentParser(
+    description="irobman-project-lab-perception"
+)
+
+parser.add_argument(
+    "--sim_mode", type=bool, default=True, help="Whether to configure the node for simulation or the real robot"
+)
+
+# parse the arguments
+args_cli = parser.parse_args()
+
+print(f"SIM MODE: {args_cli.sim_mode}")
 
 class Perception:
     def __init__(self):
@@ -36,7 +54,10 @@ class Perception:
         #  self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = TransformListener()
         self._source_frame = "world"
-        self._target_frame = "zed2_left_camera_frame"
+        if args_cli.sim_mode:
+            self._target_frame = "left_camera_link"
+        else:
+            self._target_frame = "zed2_left_camera_frame"
 
         self.repo_folder = os.path.join(os.path.dirname(__file__), os.path.pardir)
 
@@ -176,22 +197,36 @@ class Perception:
 
         # fx, fy = 527.2972398956961, 527.2972398956961
         # cx_cam, cy_cam = 640, 360
-        # K = [527.2972398956961, 0.0, 658.8206787109375, 0.0, 527.2972398956961, 372.25787353515625, 0.0, 0.0, 1.0]
-        K = [
-            260.6392822265625,
-            0.0,
-            315.3443298339844,
-            0.0,
-            260.6392822265625,
-            184.0966033935547,
-            0.0,
-            0.0,
-            1.0,
-        ]
+        if args_cli.sim_mode:
+            K = [
+                527.2972398956961, 
+                0.0, 
+                658.8206787109375, 
+                0.0, 
+                527.2972398956961, 
+                372.25787353515625, 
+                0.0, 
+                0.0, 
+                1.0,
+            ]
+        else:
+            K = [
+                260.6392822265625,
+                0.0,
+                315.3443298339844,
+                0.0,
+                260.6392822265625,
+                184.0966033935547,
+                0.0,
+                0.0,
+                1.0,
+            ]
         fx, fy = K[0], K[4]
         # cx_cam, cy_cam = K[2], K[5]
-        # cx_cam, cy_cam = 640, 360
-        cx_cam, cy_cam = 320, 180
+        if args_cli.sim_mode:
+            cx_cam, cy_cam = 640, 360
+        else:
+            cx_cam, cy_cam = 320, 180
 
         bboxes_ = bboxes.cpu().numpy()
         filtered_points = []
@@ -236,25 +271,42 @@ class Perception:
 
         t = self._tf_listener.getLatestCommonTime(
             self._source_frame, self._target_frame
-        )
+            )
         trans = self._tf_listener.lookupTransform(
             self._source_frame, self._target_frame, t
         )
 
-        # print(trans.transform)
+            # print(trans.transform)
 
         translation = trans[0]
         rotation = trans[1]
 
-        extrinsic_rotation_init = R.from_quat([0.500, -0.500, 0.500, 0.500]).as_matrix()
-        extrinsic_rotation = R.from_quat(
-            rotation
-        ).as_matrix()  # rosrun tf tf_echo world zed2_left_camera_frame
-        extrinsic_translation = np.array(translation)
-        points_base_frame = (extrinsic_rotation_init.T @ filtered_points[:, :3].T).T
-        points_base_frame = (
-            extrinsic_rotation.T @ points_base_frame[:, :3].T
-        ).T + extrinsic_translation
+        if args_cli.sim_mode:
+            # extrinsic_rotation = R.from_quat([0.658734, 0.658652, 0.257135, 0.257155]).as_matrix()
+            # extrinsic_translation = np.array([0.209647, -0.0600195, 0.56205])
+            # points_base_frame = (extrinsic_rotation @ filtered_points[:, :3].T).T + extrinsic_translation
+            extrinsic_rotation_init = R.from_quat([0.500, -0.500, 0.500, 0.500]).as_matrix()
+            extrinsic_rotation = R.from_quat(
+                rotation
+            ).as_matrix()  # rosrun tf tf_echo world zed2_left_camera_frame
+            extrinsic_translation = np.array(translation)
+            points_base_frame = (extrinsic_rotation_init.T @ filtered_points[:, :3].T).T
+            points_base_frame = (
+                extrinsic_rotation.T @ points_base_frame[:, :3].T
+            ).T + extrinsic_translation
+        else:
+            
+            extrinsic_rotation_init = R.from_quat([0.500, -0.500, 0.500, 0.500]).as_matrix()
+            extrinsic_rotation = R.from_quat(
+                rotation
+            ).as_matrix()  # rosrun tf tf_echo world zed2_left_camera_frame
+            extrinsic_translation = np.array(translation)
+            points_base_frame = (extrinsic_rotation_init.T @ filtered_points[:, :3].T).T
+            points_base_frame = (
+                extrinsic_rotation.T @ points_base_frame[:, :3].T
+            ).T + extrinsic_translation
+
+
 
         # valid_mask = (points_base_frame[:, 0] > 0.00) and (
         #     points_base_frame[:, 0] < 0.81
@@ -279,6 +331,7 @@ class Perception:
             points_for_closest_label = points_with_labels[
                 points_with_labels[:, 3] == closest_label
             ]
+            
 
             xmax = points_for_closest_label[:, 0].max()
             xmin = points_for_closest_label[:, 0].min()
@@ -309,9 +362,30 @@ class Perception:
             # midpoint_z = zmax / 2
             midpoint_z = (zmax + zmin) / 2 - 0.015
 
-            yaw = self.calculate_angle(
-                x1=xmin, y1=y_for_xmin, x2=x_for_ymax, y2=ymax, x3=0, y3=0, x4=1, y4=0
-            )
+            
+
+            # yaw = self.calculate_angle(
+            #     x1=xmin, y1=y_for_xmin, x2=x_for_ymax, y2=ymax, x3=0, y3=0, x4=1, y4=0
+            # )
+            # --- Outlier removal step ---
+
+            if points_for_closest_label.shape[0] < 3:
+                rospy.logwarn(f"Not enough points for Cube {closest_label}, skipping...")
+                continue
+            
+            points_cleaned = self.remove_outliers(points_for_closest_label[:, :3])
+
+            if points_cleaned.size == 0:
+                rospy.logwarn(f"Cube {closest_label} has no points after outlier removal.")
+                continue
+
+            # Robust centroid calculation
+            centroid = np.mean(points_cleaned, axis=0)
+            midpoint_x, midpoint_y, midpoint_z = centroid[0], centroid[1], centroid[2]
+
+            # --- PCA-based robust yaw estimation ---
+            yaw = self.estimate_pose_with_pca(points_cleaned)
+
 
             label_stats[closest_label] = {
                 "translation": (midpoint_x, midpoint_y, midpoint_z),
@@ -343,145 +417,181 @@ class Perception:
 
         return points_with_labels, label_stats
 
+    def remove_outliers(self, points, nb_neighbors=30, std_ratio=2.0):
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points)
+
+    #statistical outlier removal
+        pcd_filtered, ind = pcd.remove_statistical_outlier(
+            nb_neighbors=nb_neighbors, std_ratio=std_ratio
+        )
+        return np.asarray(pcd_filtered.points)
+
+    def estimate_pose_with_pca(self, points):
+        if points.shape[0] < 3:
+            rospy.logwarn("Insufficient points for PCA estimation.")
+            return 0.0
+
+        xy_points = points[:, :2]
+        pca = PCA(n_components=2)
+        pca.fit(xy_points)
+
+        principal_axis = pca.components_[0]
+
+        yaw = np.arctan2(principal_axis[1], principal_axis[0])
+        yaw_deg = np.degrees(yaw)
+
+        return yaw_deg
+
+
     def callback_rgb(self, data):
         np_arr = np.frombuffer(data.data, np.uint8)
         rgb_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        self.rgb_image = rgb_image
 
-        source = rgb_image
-        results = self.model(source)  # return a list of Results objects
+    def _process_rgb(self):
+        # np_arr = np.frombuffer(data.data, np.uint8)
+        # rgb_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        if self.rgb_image is not None:
+            source = self.rgb_image
+            results = self.model(source)  # return a list of Results objects
 
-        for i, result in enumerate(results):
-            boxes = result.boxes  # Boxes object for bounding box outputs
-            self.xyxy = boxes.xyxy
-            save_path = os.path.join(self.repo_folder, "test_images", f"result{i}.jpg")
-            result.save(save_path)
+            for i, result in enumerate(results):
+                boxes = result.boxes  # Boxes object for bounding box outputs
+                self.xyxy = boxes.xyxy
+                save_path = os.path.join(self.repo_folder, "test_images", f"result{i}.jpg")
+                result.save(save_path)
 
     def callback_pc(self, data: PointCloud2):
         # subscribe'
-        pc_data = pc2.read_points(data, field_names=("x", "y", "z"), skip_nans=True)
+        self.pc_data = pc2.read_points(data, field_names=("x", "y", "z"), skip_nans=True)
 
-        # ! We can use uvs parameter to only read pointcloud data at given coordinates
-        # @param uvs: If specified, then only return the points at the given coordinates. [default: empty list]
-        # @type  uvs: iterable
+    def _process_pc(self):
+        if self.pc_data is not None:
+            pc_data = self.pc_data
+            # ! We can use uvs parameter to only read pointcloud data at given coordinates
+            # @param uvs: If specified, then only return the points at the given coordinates. [default: empty list]
+            # @type  uvs: iterable
 
-        # transform from zed2_left_camera_optical_frame to base_link while disconnected from panda
-        # - Translation: [0.060, 0.015, 0.011]
-        # - Rotation: in Quaternion [0.512, -0.512, 0.487, 0.487]
-        # in RPY (radian) [3.142, -1.521, -1.571]
-        # in RPY (degree) [180.000, -87.135, -90.000]
+            # transform from zed2_left_camera_optical_frame to base_link while disconnected from panda
+            # - Translation: [0.060, 0.015, 0.011]
+            # - Rotation: in Quaternion [0.512, -0.512, 0.487, 0.487]
+            # in RPY (radian) [3.142, -1.521, -1.571]
+            # in RPY (degree) [180.000, -87.135, -90.000]
 
-        point_cloud_list = list(pc_data)
-        point_cloud_np = np.array(point_cloud_list)  # .clip(0.3, 15.0)
-        # * Sanity check to see if reading the pointcloud and publishing it is destroying something
-        # works fine
+            point_cloud_list = list(pc_data)
+            point_cloud_np = np.array(point_cloud_list)  # .clip(0.3, 15.0)
+            # * Sanity check to see if reading the pointcloud and publishing it is destroying something
+            # works fine
 
-        # plt.hist(point_cloud_np[:, 2].clip(-150.0, 150.0))
-        # plt.savefig("tmp.png")
+            # plt.hist(point_cloud_np[:, 2].clip(-150.0, 150.0))
+            # plt.savefig("tmp.png")
 
-        # labels = np.ones((point_cloud_np.shape[0], 1))
-        # new_pc = np.hstack((point_cloud_np, labels))
+            # labels = np.ones((point_cloud_np.shape[0], 1))
+            # new_pc = np.hstack((point_cloud_np, labels))
 
-        #   <node pkg="tf" type="static_transform_publisher" name="camera_link_broadcaster"
-        # args="-0.115 0.056 0.018  -0.09 -1.25 0.075 panda_hand zed2_left_camera_frame 100" />
+            #   <node pkg="tf" type="static_transform_publisher" name="camera_link_broadcaster"
+            # args="-0.115 0.056 0.018  -0.09 -1.25 0.075 panda_hand zed2_left_camera_frame 100" />
 
-        extrinsic_rotation = R.from_quat([0.500, -0.500, 0.500, 0.500]).as_matrix()
-        extrinsic_translation = np.array([0.00, 0.00, 0.00])
-        point_cloud_np = (
-            extrinsic_rotation @ point_cloud_np[:, :3].T
-        ).T - extrinsic_translation
+            if not args_cli.sim_mode:
+                extrinsic_rotation = R.from_quat([0.500, -0.500, 0.500, 0.500]).as_matrix()
+                extrinsic_translation = np.array([0.00, 0.00, 0.00])
+                point_cloud_np = (
+                    extrinsic_rotation @ point_cloud_np[:, :3].T
+                ).T - extrinsic_translation
 
-        # X2, Y2, Z2 = point_cloud_np[:, 0], point_cloud_np[:, 1], point_cloud_np[:, 2]
+            # X2, Y2, Z2 = point_cloud_np[:, 0], point_cloud_np[:, 1], point_cloud_np[:, 2]
 
-        # new_pc = point_cloud_np
+            # new_pc = point_cloud_np
 
-        # point_cloud_np[:, 2] = point_cloud_np[:, 2].clip(0.0, 20.0)
+            # point_cloud_np[:, 2] = point_cloud_np[:, 2].clip(0.0, 20.0)
 
-        # header = std_msgs.msg.Header()
-        # header.stamp = rospy.Time.now()
-        # header.frame_id = "zed2_left_camera_optical_frame"
-        # # header.frame_id = "zed2_left_camera_frame"
-
-        # fields = [
-        #     PointField("x", 0, PointField.FLOAT32, 1),
-        #     PointField("y", 4, PointField.FLOAT32, 1),
-        #     PointField("z", 8, PointField.FLOAT32, 1),
-        #     # PointField("label", 12, PointField.INT8, 1),
-        # ]
-
-        # cloud_data = create_cloud(
-        #     header=header,
-        #     fields=fields,
-        #     points=new_pc,
-        # )
-
-        # new_pointcloud = PointCloud2(cloud_data)
-
-        #  pub_pointcloud.publish(cloud_data)
-
-        # point_cloud = o3d.geometry.PointCloud()
-        # point_cloud.points = o3d.utility.Vector3dVector(point_cloud_np)
-
-        # o3d.visualization.draw_geometries([point_cloud])
-
-        # X1, Y1, Z1 = point_cloud_np[:, 0], point_cloud_np[:, 1], point_cloud_np[:, 2]
-
-        # combined_points = np.hstack((filtered_points_np, labels_np.reshape(-1, 1)))
-        # point_cloud_msg = create_cloud(header, fields, combined_points)
-
-        # pub_pointcloud.publish(point_cloud_msg)
-
-        # publish
-
-        if self.xyxy is not None and len(self.xyxy) > 0:
-            print("run filter_pc")
-            filtered_points_with_labels, label_stats = self.filter_pc(
-                point_cloud_np, self.xyxy
-            )
-
-            # create a PointCloud2 Message
-            filtered_points_np = filtered_points_with_labels[:, :3]
-            labels_np = filtered_points_with_labels[:, 3]
-
-            header = std_msgs.msg.Header()
-            header.stamp = rospy.Time.now()
+            # header = std_msgs.msg.Header()
+            # header.stamp = rospy.Time.now()
             # header.frame_id = "zed2_left_camera_optical_frame"
-            header.frame_id = "world"
+            # # header.frame_id = "zed2_left_camera_frame"
 
-            fields = [
-                PointField("x", 0, PointField.FLOAT32, 1),
-                PointField("y", 4, PointField.FLOAT32, 1),
-                PointField("z", 8, PointField.FLOAT32, 1),
-                PointField("label", 12, PointField.FLOAT32, 1),
-            ]
+            # fields = [
+            #     PointField("x", 0, PointField.FLOAT32, 1),
+            #     PointField("y", 4, PointField.FLOAT32, 1),
+            #     PointField("z", 8, PointField.FLOAT32, 1),
+            #     # PointField("label", 12, PointField.INT8, 1),
+            # ]
 
-            combined_points = np.hstack((filtered_points_np, labels_np.reshape(-1, 1)))
-            point_cloud_msg = create_cloud(header, fields, combined_points)
+            # cloud_data = create_cloud(
+            #     header=header,
+            #     fields=fields,
+            #     points=new_pc,
+            # )
 
-            pub_pointcloud.publish(point_cloud_msg)
+            # new_pointcloud = PointCloud2(cloud_data)
 
-            # create a PoseArray Message
-            pose_array = PoseArray()
-            # pose_array.header.frame_id = "zed2_left_camera_optical_frame"
-            pose_array.header.frame_id = "world"
+            #  pub_pointcloud.publish(cloud_data)
 
-            for label, stats in label_stats.items():
-                pose = Pose()
-                translation = stats["translation"]
-                rotation = stats["rotation"]
+            # point_cloud = o3d.geometry.PointCloud()
+            # point_cloud.points = o3d.utility.Vector3dVector(point_cloud_np)
 
-                pose.position.x = translation[0]
-                pose.position.y = translation[1]
-                pose.position.z = translation[2]
+            # o3d.visualization.draw_geometries([point_cloud])
 
-                quaternion = R.from_euler("xyz", rotation, degrees=True).as_quat()
-                pose.orientation.x = quaternion[0]
-                pose.orientation.y = quaternion[1]
-                pose.orientation.z = quaternion[2]
-                pose.orientation.w = quaternion[3]
+            # X1, Y1, Z1 = point_cloud_np[:, 0], point_cloud_np[:, 1], point_cloud_np[:, 2]
 
-                pose_array.poses.append(pose)
+            # combined_points = np.hstack((filtered_points_np, labels_np.reshape(-1, 1)))
+            # point_cloud_msg = create_cloud(header, fields, combined_points)
 
-            pub_cube_pose.publish(pose_array)
+            # pub_pointcloud.publish(point_cloud_msg)
+
+            # publish
+
+            if self.xyxy is not None and len(self.xyxy) > 0:
+                print("run filter_pc")
+                filtered_points_with_labels, label_stats = self.filter_pc(
+                    point_cloud_np, self.xyxy
+                )
+
+                # create a PointCloud2 Message
+                filtered_points_np = filtered_points_with_labels[:, :3]
+                labels_np = filtered_points_with_labels[:, 3]
+
+                header = std_msgs.msg.Header()
+                header.stamp = rospy.Time.now()
+                # header.frame_id = "zed2_left_camera_optical_frame"
+                header.frame_id = "world"
+
+                fields = [
+                    PointField("x", 0, PointField.FLOAT32, 1),
+                    PointField("y", 4, PointField.FLOAT32, 1),
+                    PointField("z", 8, PointField.FLOAT32, 1),
+                    PointField("label", 12, PointField.FLOAT32, 1),
+                ]
+
+                combined_points = np.hstack((filtered_points_np, labels_np.reshape(-1, 1)))
+                self.point_cloud_msg = create_cloud(header, fields, combined_points)
+
+                # pub_pointcloud.publish(self.point_cloud_msg)
+
+                # create a PoseArray Message
+                self.pose_array = PoseArray()
+                # pose_array.header.frame_id = "zed2_left_camera_optical_frame"
+                self.pose_array.header.frame_id = "world"
+
+                for label, stats in label_stats.items():
+                    pose = Pose()
+                    translation = stats["translation"]
+                    rotation = stats["rotation"]
+
+                    pose.position.x = translation[0]
+                    pose.position.y = translation[1]
+                    pose.position.z = translation[2]
+
+                    quaternion = R.from_euler("xyz", rotation, degrees=True).as_quat()
+                    pose.orientation.x = quaternion[0]
+                    pose.orientation.y = quaternion[1]
+                    pose.orientation.z = quaternion[2]
+                    pose.orientation.w = quaternion[3]
+
+                    self.pose_array.poses.append(pose)
+
+                # pub_cube_pose.publish(self.pose_array)
 
     def tf_translation_callback(self, msg):
         self.tf_translation = msg.data
@@ -490,6 +600,21 @@ class Perception:
     def tf_rotation_callback(self, msg):
         self.tf_rotation = msg.data
         print(f"Rotation: {self.tf_rotation}")
+
+
+    def get_cube_estimates(self, req):
+        # * 1 Classify objects
+        self._process_rgb()
+        bboxes = self.xyxy
+
+        if bboxes is None:
+            return GetCubePoseEstimatesResponse(None, None)
+        # * 2 Process Pointcloud
+        self._process_pc()
+        filtered_pc = self.point_cloud_msg
+        pose_array = self.pose_array
+        return GetCubePoseEstimatesResponse(filtered_pc, pose_array)
+
 
 
 def perception():
@@ -519,9 +644,13 @@ def perception():
     )
     rospy.Subscriber("/tf_rotation", Float64MultiArray, perception.tf_rotation_callback)
 
-    global pub_pointcloud, pub_cube_pose
-    pub_pointcloud = rospy.Publisher("filtered_point_cloud", PointCloud2, queue_size=10)
-    pub_cube_pose = rospy.Publisher("cube_pose", PoseArray, queue_size=10)
+    # global pub_pointcloud, pub_cube_pose
+    # pub_pointcloud = rospy.Publisher("filtered_point_cloud", PointCloud2, queue_size=10)
+    # pub_cube_pose = rospy.Publisher("cube_pose", PoseArray, queue_size=10)
+
+    rospy.Service("/get_cube_pose_estimates", GetCubePoseEstimates, perception.get_cube_estimates)
+
+    rospy.loginfo(f"Cube Pose Service Ready!")
 
     rospy.spin()
     cv2.destroyAllWindows()

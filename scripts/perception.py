@@ -64,13 +64,11 @@ class Perception:
         model_path = os.path.join(self.repo_folder, "model", "best.pt")
 
         rospy.loginfo("Loading YOLO Model ...")
-        self.model = YOLO(model_path)  # Load a trained model
+        self.model = YOLO(model_path)
+        self.model.eval() # we set the model to evaluation mode
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)  # we move image to GPU (it is available in the Lab's computer as far as I know)
         rospy.loginfo("Finished loading YOLO Model.")
-
-        # TODO: Most of our time is spent on inference. Can we speed this up?
-        # * For example:
-        # 0: 384x640 19 cubes, 1437.4ms
-        # Speed: 87.7ms preprocess, 1437.4ms inference, 1.3ms postprocess per image at shape (1, 3, 384, 640)
 
     def knn(self, labels, points_with_labels):
         cube_centers = []
@@ -231,9 +229,10 @@ class Perception:
         bboxes_ = bboxes.cpu().numpy()
         filtered_points = []
         labels = []
-        # TODO: need failsafe for when bboxes_ arraz is empty
+
         if len(bboxes_) == 0:
-            return
+            rospy.logwarn("No bounding boxes detected. Skipping point cloud filtering and returning empty results.")
+            return np.empty((0, 4)), {}# return empty array with 4 columns (x, y, z, label) and empty dictionary for label stats
         for i, bbox in enumerate(bboxes_):
             x1, y1, x2, y2 = bbox
 
@@ -453,8 +452,10 @@ class Perception:
         # np_arr = np.frombuffer(data.data, np.uint8)
         # rgb_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         if self.rgb_image is not None:
-            source = self.rgb_image
-            results = self.model(source)  # return a list of Results objects
+            source = self.rgb_image  # we wrap inference in no_grad to disable gradient computation
+
+            with torch.no_grad():
+                results = self.model(source)  # return a list of Results objects
 
             for i, result in enumerate(results):
                 boxes = result.boxes  # Boxes object for bounding box outputs

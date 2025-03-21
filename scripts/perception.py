@@ -2,12 +2,13 @@ import numpy as np
 import cv2
 import rospy
 import open3d as o3d
+import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation as R
 from open3d.visualization import draw_plotly
-from sensor_msgs.msg import CompressedImage, Image, PointCloud2, PointField
+from sensor_msgs.msg import CompressedImage, PointCloud2, PointField
+from std_msgs.msg import Float64MultiArray
 from sensor_msgs import point_cloud2 as pc2
 from sensor_msgs.point_cloud2 import create_cloud
-from cv_bridge import CvBridge
 from geometry_msgs.msg import Pose
 from visualization_msgs.msg import Marker
 import std_msgs.msg
@@ -19,7 +20,6 @@ from ultralytics import YOLO
 
 class Perception:
     def __init__(self):
-        self.bridge = CvBridge()
         self.xyxy = None
         self.rgb_image = None
         self.depth_image = None
@@ -71,7 +71,7 @@ class Perception:
         previous_labels = None
         iteration = 0
 
-        while iteration < 20:
+        while iteration < 50:
             closest_labels, points_with_labels = self.knn(labels, points_with_labels)
 
             if previous_labels is not None and np.array_equal(previous_labels, closest_labels):
@@ -98,6 +98,238 @@ class Perception:
         theta = np.degrees(theta)
         
         return theta
+
+    def find_midpoint_z(self, pointcloud, closest_label):
+        z_values = pointcloud[:, 2]
+        bins_count = 100 # 50  
+
+        counts, bins = np.histogram(z_values, bins=bins_count)
+
+        max_bin_index = np.argmax(counts)
+        max_bin_center = (bins[max_bin_index] + bins[max_bin_index + 1]) / 2
+
+        midpoint_z = max_bin_center / 2
+
+        # Histogram
+        plt.figure(figsize=(8, 5))
+        plt.hist(z_values, bins=bins_count, color='blue', alpha=0.7, edgecolor='black')
+        plt.xlabel("Z-Axis")
+        plt.ylabel("Frequency")
+        plt.title(f"Cube {closest_label} - Frequency Changes with Z-Axis of word-frame")
+        plt.grid(True)
+
+        plt.axvline(max_bin_center, color='red', linestyle='dashed', linewidth=2, label=f"Peak: {max_bin_center:.2f}")
+        plt.legend()
+        plt.savefig("/opt/ros_ws/src/perception/test_images/z_world_histogram")
+        plt.close()
+        # plt.show()
+
+        return midpoint_z
+
+    def find_midpoint_xy(self, pointcloud, midpoint_x, midpoint_y, yaw, closest_label):
+        results_x = []
+        results_y = []
+        max_diff_x = -np.inf
+        max_diff_y = -np.inf
+        best_yaw_x = None
+        best_yaw_y = None
+        best_freq_x = None
+        best_freq_y = None
+        best_x = None
+        best_y = None
+
+        # x_values = pointcloud[:, 0]  # (before-world)
+        # y_values = pointcloud[:, 1]
+
+        for yaw in range(int(yaw) - 185, int(yaw) + 185, 1):  # 180 # 90 # 45
+            cos_yaw, sin_yaw = np.cos(np.radians(-yaw)), np.sin(np.radians(-yaw)) 
+            R_world_to_cube = np.array([
+                [cos_yaw, -sin_yaw],
+                [sin_yaw,  cos_yaw]
+            ])
+
+            # convert X and Y axes of world-frame to cube-frame
+            world_xy = pointcloud[:, :2]
+            cube_xy = (R_world_to_cube @ (world_xy - np.array([midpoint_x, midpoint_y])).T).T  
+
+            # Get the x and y value in the cube-frame
+            cube_x_values = cube_xy[:, 0]  
+            cube_y_values = cube_xy[:, 1] 
+
+            # ———————————————————————————— X ————————————————————————————
+            bins_count = 100 # 50 
+            counts_x, bins_x = np.histogram(cube_x_values, bins=bins_count)
+
+            bin_centers_x = (bins_x[:-1] + bins_x[1:]) / 2
+            middle_index_x = len(bin_centers_x) // 2
+            middle_x = bin_centers_x[middle_index_x]
+
+            top3_indices_x = np.argsort(counts_x)[-3:][::-1] 
+            top3_freqs_x = counts_x[top3_indices_x]  
+            top3_x_vals = [(bins_x[i] + bins_x[i + 1]) / 2 for i in top3_indices_x]  
+
+            # Calculate the difference between top_1_freq and top_2_freq
+            diff_x = top3_freqs_x[0] - top3_freqs_x[1]
+            if diff_x > max_diff_x:
+                max_diff_x = diff_x
+                best_yaw_x = yaw
+                best_middle_x = middle_x
+                best_freq_x = top3_freqs_x[0]
+                best_x = top3_x_vals[0]
+
+            results_x.append({
+                "yaw": yaw,
+                "top_1_freq": top3_freqs_x[0], "top_1_x": top3_x_vals[0],
+                "top_2_freq": top3_freqs_x[1], "top_2_x": top3_x_vals[1],
+                "top_3_freq": top3_freqs_x[2], "top_3_x": top3_x_vals[2]
+            })
+
+            # ———————————————————————————— Y ————————————————————————————
+            counts_y, bins_y = np.histogram(cube_y_values, bins=bins_count)  
+
+            bin_centers_y = (bins_y[:-1] + bins_y[1:]) / 2
+            middle_index_y = len(bin_centers_y) // 2
+            middle_y = bin_centers_y[middle_index_y]
+
+            top3_indices_y = np.argsort(counts_y)[-3:][::-1]  
+            top3_freqs_y = counts_y[top3_indices_y]  
+            top3_y_vals = [(bins_y[i] + bins_y[i + 1]) / 2 for i in top3_indices_y]  
+
+            diff_y = top3_freqs_y[0] - top3_freqs_y[1]  
+            if diff_y > max_diff_y:
+                max_diff_y = diff_y
+                best_yaw_y = yaw
+                best_middle_y = middle_y
+                best_freq_y = top3_freqs_y[0]
+                best_y = top3_y_vals[0]  
+
+            results_y.append({
+                "yaw": yaw,
+                "top_1_freq": top3_freqs_y[0], "top_1_y": top3_y_vals[0],
+                "top_2_freq": top3_freqs_y[1], "top_2_y": top3_y_vals[1],
+                "top_3_freq": top3_freqs_y[2], "top_3_y": top3_y_vals[2]
+            })
+
+        # ———————————————————————————— Yaw based on the X-axis ————————————————————————————
+        cos_yaw_x, sin_yaw_x = np.cos(np.radians(-best_yaw_x)), np.sin(np.radians(-best_yaw_x))
+        R_world_to_cube_x = np.array([
+            [cos_yaw_x, -sin_yaw_x],
+            [sin_yaw_x,  cos_yaw_x]
+        ])
+        cube_xy_x = (R_world_to_cube_x @ (pointcloud[:, :2] - np.array([midpoint_x, midpoint_y])).T).T  
+        best_cube_x_values = cube_xy_x[:, 0]
+        
+        # print("best_yaw_x:", best_yaw_x)
+        # print("best_freq_x:", best_freq_x, "best_x:", best_x)
+        # print("midpoint_x:", midpoint_x)
+
+        ### Histogram ###
+        plt.figure(figsize=(8, 5))
+        # plt.hist(x_values, bins=bins_count, color='blue', alpha=0.7, edgecolor='black')            # (before-world)
+        # plt.hist(cube_x_values, bins=bins_count, color='blue', alpha=0.7, edgecolor='black')       # before-cube
+        plt.hist(best_cube_x_values, bins=bins_count, color='blue', alpha=0.7, edgecolor='black')    # after-cube
+        plt.xlabel("X-Axis")
+        plt.ylabel("Frequency")
+        plt.title(f"Cube {closest_label} - Frequency Changes with X-Axis of cube-frame")
+        plt.grid(True)
+        plt.legend()
+        plt.savefig("/opt/ros_ws/src/perception/test_images/x_cube_histogram")
+        plt.close()
+        # plt.show()
+        
+        ### Trend Chart ###
+        yaws_x = [r["yaw"] for r in results_x]
+        top_1_freqs_x = [r["top_1_freq"] for r in results_x]
+        top_2_freqs_x = [r["top_2_freq"] for r in results_x]
+        top_3_freqs_x = [r["top_3_freq"] for r in results_x]
+        avg_top3_freqs_x = [(r["top_1_freq"] + r["top_2_freq"] + r["top_3_freq"]) / 3 for r in results_x]
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(yaws_x, top_1_freqs_x, label="Top 1 Frequency (X)", marker='o')
+        plt.plot(yaws_x, top_2_freqs_x, label="Top 2 Frequency (X)", marker='s')
+        plt.plot(yaws_x, top_3_freqs_x, label="Top 3 Frequency (X)", marker='^')
+        plt.plot(yaws_x, avg_top3_freqs_x, label="Top 3 Avg (X)", linewidth=3, linestyle='--', color='black')
+        plt.xlabel("Yaw Angle (degrees)")
+        plt.ylabel("Frequency")
+        plt.title(f"Cube {closest_label} - Frequency Changes with Yaw Rotation (X Axis)")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig("/opt/ros_ws/src/perception/test_images/x_cube_trendchart")
+        plt.close()
+        # plt.show()
+
+        # ———————————————————————————— Yaw based on the Y-axis ————————————————————————————
+        cos_yaw_y, sin_yaw_y = np.cos(np.radians(-best_yaw_y)), np.sin(np.radians(-best_yaw_y))
+        R_world_to_cube_y = np.array([
+            [cos_yaw_y, -sin_yaw_y],
+            [sin_yaw_y,  cos_yaw_y]
+        ])
+        cube_xy_y = (R_world_to_cube_y @ (pointcloud[:, :2] - np.array([midpoint_x, midpoint_y])).T).T  
+        best_cube_y_values = cube_xy_y[:, 1]
+        
+        # print("best_yaw_y:", best_yaw_y)
+        # print("best_freq_y:", best_freq_y, "best_y:", best_y)
+        # print("midpoint_y:", midpoint_y)
+
+        ### Histogram ###
+        plt.figure(figsize=(8, 5))
+        # plt.hist(y_values, bins=bins_count, color='blue', alpha=0.7, edgecolor='black')            # (before-world)
+        # plt.hist(cube_y_values, bins=bins_count, color='blue', alpha=0.7, edgecolor='black')       # before-cube
+        plt.hist(best_cube_y_values, bins=bins_count, color='blue', alpha=0.7, edgecolor='black')    # after-cube
+        plt.xlabel("Y-Axis")
+        plt.ylabel("Frequency")
+        plt.title(f"Cube {closest_label} - Frequency Changes with Y-Axis of cube-frame")
+        plt.grid(True)
+        plt.legend()
+        plt.savefig("/opt/ros_ws/src/perception/test_images/y_cube_histogram")
+        plt.close()
+        # plt.show()
+        
+        ### Trend Chart ###
+        yaws_y = [r["yaw"] for r in results_y]
+        top_1_freqs_y = [r["top_1_freq"] for r in results_y]
+        top_2_freqs_y = [r["top_2_freq"] for r in results_y]
+        top_3_freqs_y = [r["top_3_freq"] for r in results_y]
+        avg_top3_freqs_y = [(r["top_1_freq"] + r["top_2_freq"] + r["top_3_freq"]) / 3 for r in results_y]
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(yaws_y, top_1_freqs_y, label="Top 1 Frequency (Y)", marker='o')
+        plt.plot(yaws_y, top_2_freqs_y, label="Top 2 Frequency (Y)", marker='s')
+        plt.plot(yaws_y, top_3_freqs_y, label="Top 3 Frequency (Y)", marker='^')
+        plt.plot(yaws_y, avg_top3_freqs_y, label="Top 3 Avg (Y)", linewidth=3, linestyle='--', color='black')
+        plt.xlabel("Yaw Angle (degrees)")
+        plt.ylabel("Frequency")
+        plt.title(f"Cube {closest_label} - Frequency Changes with Yaw Rotation (Y Axis)")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig("/opt/ros_ws/src/perception/test_images/y_cube_trendchart")
+        plt.close()
+        # plt.show()
+
+        #  ———————————————————————————— choose yaw based on X or Y ————————————————————————————
+        best_yaw = best_yaw_x if max_diff_x > max_diff_y else best_yaw_y
+        # print("max_diff_x", max_diff_x)
+        # print("max_diff_y", max_diff_y)
+        # print("best_yaw", best_yaw)
+
+        cos_yaw, sin_yaw = np.cos(np.radians(best_yaw)), np.sin(np.radians(best_yaw))
+        R_cube_to_world = np.array([
+            [cos_yaw, sin_yaw], 
+            [-sin_yaw, cos_yaw]
+        ])
+        best_middle_xy_world = R_cube_to_world @ np.array([best_middle_x, best_middle_y]) + np.array([midpoint_x, midpoint_y])
+        midpoint_x = best_middle_xy_world[0]# + midpoint_x
+        midpoint_y = best_middle_xy_world[1]# + midpoint_y
+        # midpoint_x = cos_yaw * best_x - sin_yaw * 0 + midpoint_x
+        # midpoint_y = sin_yaw * 0 + cos_yaw * best_y + midpoint_y
+
+        # print("best_yaw:", best_yaw)
+        # print("best_freq_x:", best_freq_x, "best_x:", best_x)
+        # print("best_freq_y:", best_freq_y, "best_y:", best_y)
+        # print("midpoint_x:", midpoint_x)
+        # print("midpoint_y:", midpoint_y)
+
+        return midpoint_x, midpoint_y, best_yaw
 
     # draw cube axes in Open3D(optional)
     def cube_axes(self, x, y, z, yaw):
@@ -135,100 +367,31 @@ class Perception:
 
         return x_axis, y_axis, z_axis
 
-    # draw cube axes in RViz
-    def create_axis_markers(self, pose, marker_id_start, frame_id="map"):
-        markers = []
-        arrow_length = 0.5
-        arrow_diameter = 0.05
-
-        # --- X-axis(red) ---
-        marker_x = Marker()
-        marker_x.header.frame_id = frame_id
-        marker_x.type = Marker.ARROW
-        marker_x.action = Marker.ADD
-        marker_x.id = marker_id_start
-        marker_x.pose = pose
-        marker_x.scale.x = arrow_length
-        marker_x.scale.y = arrow_diameter
-        marker_x.scale.z = arrow_diameter
-        marker_x.color.r = 1.0
-        marker_x.color.a = 1.0
-
-        markers.append(marker_x)
-
-        # --- Y-axis(green) ---
-        marker_y = Marker()
-        marker_y.header.frame_id = frame_id
-        marker_y.type = Marker.ARROW
-        marker_y.action = Marker.ADD
-        marker_y.id = marker_id_start + 1
-        marker_y.pose = pose
-        marker_y.scale.x = arrow_length
-        marker_y.scale.y = arrow_diameter
-        marker_y.scale.z = arrow_diameter
-        marker_y.color.g = 1.0
-        marker_y.color.a = 1.0
-
-        quat_y = tft.quaternion_from_euler(0, 0, 1.5708)
-        marker_y.pose.orientation.x = quat_y[0]
-        marker_y.pose.orientation.y = quat_y[1]
-        marker_y.pose.orientation.z = quat_y[2]
-        marker_y.pose.orientation.w = quat_y[3]
-        markers.append(marker_y)
-
-        # --- Z-axis(blue) ---
-        marker_z = Marker()
-        marker_z.header.frame_id = frame_id
-        marker_z.type = Marker.ARROW
-        marker_z.action = Marker.ADD
-        marker_z.id = marker_id_start + 2
-        marker_z.pose = pose
-        marker_z.scale.x = arrow_length
-        marker_z.scale.y = arrow_diameter
-        marker_z.scale.z = arrow_diameter
-        marker_z.color.b = 1.0
-        marker_z.color.a = 1.0
-
-        quat_z = tft.quaternion_from_euler(0, -1.5708, 0)
-        marker_z.pose.orientation.x = quat_z[0]
-        marker_z.pose.orientation.y = quat_z[1]
-        marker_z.pose.orientation.z = quat_z[2]
-        marker_z.pose.orientation.w = quat_z[3]
-        markers.append(marker_z)
-
-        return markers
-
-    def filter_pc(self, rgb_image, depth_image, bboxes):
-        if rgb_image.shape[2] == 4:                                                                 
-            rgb_image = rgb_image[:, :, :3]
+    def filter_pc(self, point_cloud_np, bboxes):
+        if point_cloud_np.shape[1] == 4:
+             point_cloud_np = point_cloud_np[:, :3]
 
         K = [527.2972398956961, 0.0, 658.8206787109375, 0.0, 527.2972398956961, 372.25787353515625, 0.0, 0.0, 1.0]
-        fx, fy = K[0], K[4]
-        cx_cam, cy_cam = K[2], K[5]
-        # fx, fy = 527.2972398956961, 527.2972398956961
-        # cx_cam, cy_cam = 640, 360
+        # fx, fy = K[0], K[4]
+        # cx_cam, cy_cam = K[2], K[5]
+        fx, fy = 527.2972398956961, 527.2972398956961
+        cx_cam, cy_cam = 640, 360
         # depth_image = depth_image / 2500.0   # maybe will be used in real world
 
         bboxes_ = bboxes.cpu().numpy()
         filtered_points = []
         labels = [] 
         for i, bbox in enumerate(bboxes_):  
-            x1, y1, x2, y2 = map(int, bbox)
+            x1, y1, x2, y2 = bbox
 
-            depth_patch = depth_image[y1:y2, x1:x2]
-            # rgb_patch = rgb_image[y1:y2, x1:x2, :]
+            X, Y, Z = point_cloud_np[:, 0], point_cloud_np[:, 1], point_cloud_np[:, 2]
+            u = (X * fx / Z) + cx_cam
+            v = (Y * fy / Z) + cy_cam
+
+            in_bbox = (u >= x1) & (u <= x2) & (v >= y1) & (v <= y2)
+            filtered_points.append(point_cloud_np[in_bbox])
+            labels.append(np.full((np.sum(in_bbox), 1), i + 1))  # Assign bbox labels to points, starting from 1
             
-            u, v = np.meshgrid(np.arange(x1, x2), np.arange(y1, y2))
-            Z = depth_patch
-            X = (u - cx_cam) * Z / fx
-            Y = (v - cy_cam) * Z / fy
-
-            points = np.stack((X, Y, Z), axis=-1).reshape(-1, 3)                       # external calibration
-            # colors = rgb_patch.reshape(-1, 3) / 255.0
-
-            filtered_points.append(points)
-            labels.append(np.full((points.shape[0], 1), i + 1))  # Assign bbox labels to points, starting from 1
-
         filtered_points = np.vstack(filtered_points)
         labels = np.vstack(labels)
         filtered_points = np.hstack((filtered_points, labels))  # Add labels as a fourth column
@@ -257,6 +420,7 @@ class Perception:
             ymax = points_for_closest_label[:, 1].max()
             ymin = points_for_closest_label[:, 1].min()
             zmax = points_for_closest_label[:, 2].max()
+            zmin = points_for_closest_label[:, 2].min()
 
             y_for_xmax = np.mean(points_for_closest_label[points_for_closest_label[:, 0] == xmax, 1]) 
             y_for_xmin = np.mean(points_for_closest_label[points_for_closest_label[:, 0] == xmin, 1])
@@ -269,9 +433,16 @@ class Perception:
             midpoint2_y = (ymax + ymin) / 2
             midpoint_x = (midpoint1_x + midpoint2_x) / 2
             midpoint_y = (midpoint1_y + midpoint2_y) / 2
-            midpoint_z = zmax / 2
+            midpoint_z = (zmax + zmin) / 2
 
             yaw = self.calculate_angle(x1=xmin, y1=y_for_xmin, x2=x_for_ymax, y2=ymax, x3=0, y3=0, x4=1, y4=0)
+            # print("midpoint_x:", midpoint_x)
+            # print("midpoint_y:", midpoint_y)
+            # print("midpoint_z:", midpoint_z)
+            # print("yaw:", yaw)
+
+            # midpoint_z = self.find_midpoint_z(points_for_closest_label, closest_label)
+            # midpoint_x, midpoint_y, yaw = self.find_midpoint_xy(points_for_closest_label, midpoint_x, midpoint_y, yaw, closest_label)
 
             label_stats[closest_label] = {
                 "translation": (midpoint_x, midpoint_y, midpoint_z),
@@ -301,24 +472,25 @@ class Perception:
 
     def callback_rgb(self, data):
         np_arr = np.frombuffer(data.data, np.uint8)
-        self.rgb_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR) 
+        rgb_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR) 
    
         model = YOLO("/opt/ros_ws/src/perception/model/best.pt")    # Load a trained model
-        source = self.rgb_image
+        source = rgb_image
         results = model(source)                                     # return a list of Results objects
 
         for result in results:
             boxes = result.boxes                                    # Boxes object for bounding box outputs
             self.xyxy = boxes.xyxy
-            result.save("/opt/ros_ws/src/perception/test_images/result0.jpg")
+            result.save("/opt/ros_ws/src/perception/test_images/detect_image.jpg")
 
     def callback_pc(self, data):
         # subscribe
-        self.depth_image = self.bridge.imgmsg_to_cv2(data, desired_encoding="passthrough")
+        pc_data = pc2.read_points(data, field_names=("x", "y", "z"), skip_nans=True)
+        point_cloud_np = np.array(list(pc_data))
 
         # publish
         if self.xyxy is not None:
-            filtered_points_with_labels, label_stats = self.filter_pc(self.rgb_image, self.depth_image, self.xyxy)
+            filtered_points_with_labels, label_stats = self.filter_pc(point_cloud_np, self.xyxy)
             
             # create a PointCloud2 Message
             filtered_points_np = filtered_points_with_labels[:, :3]
@@ -369,12 +541,9 @@ def perception():
     perception = Perception()
 
     rospy.init_node('perception', anonymous=True)
-    rospy.Subscriber("/zed2/zed_node/left/image_rect_color/compressed",
-        CompressedImage, perception.callback_rgb,  queue_size = 1)
-    rospy.Subscriber("/zed2/zed_node/depth/depth_registered",
-        Image, perception.callback_pc,  queue_size = 10)
-    # rospy.Subscriber("/zed2/zed_node/point_cloud/cloud_registered",
-    #     PointCloud2, perception.callback_pc,  queue_size = 10)
+    rospy.Subscriber("/zed2/zed_node/left/image_rect_color/compressed", CompressedImage, perception.callback_rgb, queue_size = 1)
+    # rospy.Subscriber("/zed2/zed_node/depth/depth_registered", Image, perception.callback_pc, queue_size = 10)
+    rospy.Subscriber("/zed2/zed_node/point_cloud/cloud_registered", PointCloud2, perception.callback_pc, queue_size = 10)
     
     global pub_pointcloud, pub_cube_pose
     pub_pointcloud = rospy.Publisher('filtered_point_cloud', PointCloud2, queue_size=10)

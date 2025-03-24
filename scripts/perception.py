@@ -209,7 +209,8 @@ class Perception:
 
         plt.axvline(max_bin_center, color='red', linestyle='dashed', linewidth=2, label=f"Peak: {max_bin_center:.2f}")
         plt.legend()
-        plt.savefig("/opt/ros_ws/src/perception/test_images/z_world_histogram")
+        fig_path = os.path.join(self.repo_folder, "test_images", "z_world_histogram")
+        plt.savefig(fig_path)
         plt.close()
         # plt.show()
 
@@ -322,7 +323,8 @@ class Perception:
         plt.title(f"Cube {closest_label} - Frequency Changes with X-Axis of cube-frame")
         plt.grid(True)
         plt.legend()
-        plt.savefig("/opt/ros_ws/src/perception/test_images/x_cube_histogram")
+        fig_path = os.path.join(self.repo_folder, "test_images", "x_cube_histogram")
+        plt.savefig(fig_path)
         plt.close()
         # plt.show()
         
@@ -343,7 +345,8 @@ class Perception:
         plt.title(f"Cube {closest_label} - Frequency Changes with Yaw Rotation (X Axis)")
         plt.legend()
         plt.grid(True)
-        plt.savefig("/opt/ros_ws/src/perception/test_images/x_cube_trendchart")
+        fig_path = os.path.join(self.repo_folder, "test_images", "x_cube_trendchart")
+        plt.savefig(fig_path)
         plt.close()
         # plt.show()
 
@@ -370,7 +373,8 @@ class Perception:
         plt.title(f"Cube {closest_label} - Frequency Changes with Y-Axis of cube-frame")
         plt.grid(True)
         plt.legend()
-        plt.savefig("/opt/ros_ws/src/perception/test_images/y_cube_histogram")
+        fig_path = os.path.join(self.repo_folder, "test_images", "y_cube_histogram")
+        plt.savefig(fig_path)
         plt.close()
         # plt.show()
         
@@ -391,7 +395,8 @@ class Perception:
         plt.title(f"Cube {closest_label} - Frequency Changes with Yaw Rotation (Y Axis)")
         plt.legend()
         plt.grid(True)
-        plt.savefig("/opt/ros_ws/src/perception/test_images/y_cube_trendchart")
+        fig_path = os.path.join(self.repo_folder, "test_images", "y_cube_trendchart")
+        plt.savefig(fig_path)
         plt.close()
         # plt.show()
 

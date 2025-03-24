@@ -187,6 +187,238 @@ class Perception:
         z_axis.colors = o3d.utility.Vector3dVector([[0, 0, 1]])
 
         return x_axis, y_axis, z_axis
+    
+    def find_midpoint_z(self, pointcloud, closest_label):
+        z_values = pointcloud[:, 2]
+        bins_count = 100 # 50  
+
+        counts, bins = np.histogram(z_values, bins=bins_count)
+
+        max_bin_index = np.argmax(counts)
+        max_bin_center = (bins[max_bin_index] + bins[max_bin_index + 1]) / 2
+
+        midpoint_z = max_bin_center / 2
+
+        # Histogram
+        plt.figure(figsize=(8, 5))
+        plt.hist(z_values, bins=bins_count, color='blue', alpha=0.7, edgecolor='black')
+        plt.xlabel("Z-Axis")
+        plt.ylabel("Frequency")
+        plt.title(f"Cube {closest_label} - Frequency Changes with Z-Axis of word-frame")
+        plt.grid(True)
+
+        plt.axvline(max_bin_center, color='red', linestyle='dashed', linewidth=2, label=f"Peak: {max_bin_center:.2f}")
+        plt.legend()
+        plt.savefig("/opt/ros_ws/src/perception/test_images/z_world_histogram")
+        plt.close()
+        # plt.show()
+
+        return midpoint_z
+
+    def find_midpoint_xy(self, pointcloud, midpoint_x, midpoint_y, yaw, closest_label):
+        results_x = []
+        results_y = []
+        max_diff_x = -np.inf
+        max_diff_y = -np.inf
+        best_yaw_x = None
+        best_yaw_y = None
+        best_freq_x = None
+        best_freq_y = None
+        best_x = None
+        best_y = None
+
+        # x_values = pointcloud[:, 0]  # (before-world)
+        # y_values = pointcloud[:, 1]
+
+        for yaw in range(int(yaw) - 185, int(yaw) + 185, 1):  # 180 # 90 # 45
+            cos_yaw, sin_yaw = np.cos(np.radians(-yaw)), np.sin(np.radians(-yaw)) 
+            R_world_to_cube = np.array([
+                [cos_yaw, -sin_yaw],
+                [sin_yaw,  cos_yaw]
+            ])
+
+            # convert X and Y axes of world-frame to cube-frame
+            world_xy = pointcloud[:, :2]
+            cube_xy = (R_world_to_cube @ (world_xy - np.array([midpoint_x, midpoint_y])).T).T  
+
+            # Get the x and y value in the cube-frame
+            cube_x_values = cube_xy[:, 0]  
+            cube_y_values = cube_xy[:, 1] 
+
+            # ———————————————————————————— X ————————————————————————————
+            bins_count = 100 # 50 
+            counts_x, bins_x = np.histogram(cube_x_values, bins=bins_count)
+
+            bin_centers_x = (bins_x[:-1] + bins_x[1:]) / 2
+            middle_index_x = len(bin_centers_x) // 2
+            middle_x = bin_centers_x[middle_index_x]
+
+            top3_indices_x = np.argsort(counts_x)[-3:][::-1] 
+            top3_freqs_x = counts_x[top3_indices_x]  
+            top3_x_vals = [(bins_x[i] + bins_x[i + 1]) / 2 for i in top3_indices_x]  
+
+            # Calculate the difference between top_1_freq and top_2_freq
+            diff_x = top3_freqs_x[0] - top3_freqs_x[1]
+            if diff_x > max_diff_x:
+                max_diff_x = diff_x
+                best_yaw_x = yaw
+                best_middle_x = middle_x
+                best_freq_x = top3_freqs_x[0]
+                best_x = top3_x_vals[0]
+
+            results_x.append({
+                "yaw": yaw,
+                "top_1_freq": top3_freqs_x[0], "top_1_x": top3_x_vals[0],
+                "top_2_freq": top3_freqs_x[1], "top_2_x": top3_x_vals[1],
+                "top_3_freq": top3_freqs_x[2], "top_3_x": top3_x_vals[2]
+            })
+
+            # ———————————————————————————— Y ————————————————————————————
+            counts_y, bins_y = np.histogram(cube_y_values, bins=bins_count)  
+
+            bin_centers_y = (bins_y[:-1] + bins_y[1:]) / 2
+            middle_index_y = len(bin_centers_y) // 2
+            middle_y = bin_centers_y[middle_index_y]
+
+            top3_indices_y = np.argsort(counts_y)[-3:][::-1]  
+            top3_freqs_y = counts_y[top3_indices_y]  
+            top3_y_vals = [(bins_y[i] + bins_y[i + 1]) / 2 for i in top3_indices_y]  
+
+            diff_y = top3_freqs_y[0] - top3_freqs_y[1]  
+            if diff_y > max_diff_y:
+                max_diff_y = diff_y
+                best_yaw_y = yaw
+                best_middle_y = middle_y
+                best_freq_y = top3_freqs_y[0]
+                best_y = top3_y_vals[0]  
+
+            results_y.append({
+                "yaw": yaw,
+                "top_1_freq": top3_freqs_y[0], "top_1_y": top3_y_vals[0],
+                "top_2_freq": top3_freqs_y[1], "top_2_y": top3_y_vals[1],
+                "top_3_freq": top3_freqs_y[2], "top_3_y": top3_y_vals[2]
+            })
+
+        # ———————————————————————————— Yaw based on the X-axis ————————————————————————————
+        cos_yaw_x, sin_yaw_x = np.cos(np.radians(-best_yaw_x)), np.sin(np.radians(-best_yaw_x))
+        R_world_to_cube_x = np.array([
+            [cos_yaw_x, -sin_yaw_x],
+            [sin_yaw_x,  cos_yaw_x]
+        ])
+        cube_xy_x = (R_world_to_cube_x @ (pointcloud[:, :2] - np.array([midpoint_x, midpoint_y])).T).T  
+        best_cube_x_values = cube_xy_x[:, 0]
+        
+        # print("best_yaw_x:", best_yaw_x)
+        # print("best_freq_x:", best_freq_x, "best_x:", best_x)
+        # print("midpoint_x:", midpoint_x)
+
+        ### Histogram ###
+        plt.figure(figsize=(8, 5))
+        # plt.hist(x_values, bins=bins_count, color='blue', alpha=0.7, edgecolor='black')            # (before-world)
+        # plt.hist(cube_x_values, bins=bins_count, color='blue', alpha=0.7, edgecolor='black')       # before-cube
+        plt.hist(best_cube_x_values, bins=bins_count, color='blue', alpha=0.7, edgecolor='black')    # after-cube
+        plt.xlabel("X-Axis")
+        plt.ylabel("Frequency")
+        plt.title(f"Cube {closest_label} - Frequency Changes with X-Axis of cube-frame")
+        plt.grid(True)
+        plt.legend()
+        plt.savefig("/opt/ros_ws/src/perception/test_images/x_cube_histogram")
+        plt.close()
+        # plt.show()
+        
+        ### Trend Chart ###
+        yaws_x = [r["yaw"] for r in results_x]
+        top_1_freqs_x = [r["top_1_freq"] for r in results_x]
+        top_2_freqs_x = [r["top_2_freq"] for r in results_x]
+        top_3_freqs_x = [r["top_3_freq"] for r in results_x]
+        avg_top3_freqs_x = [(r["top_1_freq"] + r["top_2_freq"] + r["top_3_freq"]) / 3 for r in results_x]
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(yaws_x, top_1_freqs_x, label="Top 1 Frequency (X)", marker='o')
+        plt.plot(yaws_x, top_2_freqs_x, label="Top 2 Frequency (X)", marker='s')
+        plt.plot(yaws_x, top_3_freqs_x, label="Top 3 Frequency (X)", marker='^')
+        plt.plot(yaws_x, avg_top3_freqs_x, label="Top 3 Avg (X)", linewidth=3, linestyle='--', color='black')
+        plt.xlabel("Yaw Angle (degrees)")
+        plt.ylabel("Frequency")
+        plt.title(f"Cube {closest_label} - Frequency Changes with Yaw Rotation (X Axis)")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig("/opt/ros_ws/src/perception/test_images/x_cube_trendchart")
+        plt.close()
+        # plt.show()
+
+        # ———————————————————————————— Yaw based on the Y-axis ————————————————————————————
+        cos_yaw_y, sin_yaw_y = np.cos(np.radians(-best_yaw_y)), np.sin(np.radians(-best_yaw_y))
+        R_world_to_cube_y = np.array([
+            [cos_yaw_y, -sin_yaw_y],
+            [sin_yaw_y,  cos_yaw_y]
+        ])
+        cube_xy_y = (R_world_to_cube_y @ (pointcloud[:, :2] - np.array([midpoint_x, midpoint_y])).T).T  
+        best_cube_y_values = cube_xy_y[:, 1]
+        
+        # print("best_yaw_y:", best_yaw_y)
+        # print("best_freq_y:", best_freq_y, "best_y:", best_y)
+        # print("midpoint_y:", midpoint_y)
+
+        ### Histogram ###
+        plt.figure(figsize=(8, 5))
+        # plt.hist(y_values, bins=bins_count, color='blue', alpha=0.7, edgecolor='black')            # (before-world)
+        # plt.hist(cube_y_values, bins=bins_count, color='blue', alpha=0.7, edgecolor='black')       # before-cube
+        plt.hist(best_cube_y_values, bins=bins_count, color='blue', alpha=0.7, edgecolor='black')    # after-cube
+        plt.xlabel("Y-Axis")
+        plt.ylabel("Frequency")
+        plt.title(f"Cube {closest_label} - Frequency Changes with Y-Axis of cube-frame")
+        plt.grid(True)
+        plt.legend()
+        plt.savefig("/opt/ros_ws/src/perception/test_images/y_cube_histogram")
+        plt.close()
+        # plt.show()
+        
+        ### Trend Chart ###
+        yaws_y = [r["yaw"] for r in results_y]
+        top_1_freqs_y = [r["top_1_freq"] for r in results_y]
+        top_2_freqs_y = [r["top_2_freq"] for r in results_y]
+        top_3_freqs_y = [r["top_3_freq"] for r in results_y]
+        avg_top3_freqs_y = [(r["top_1_freq"] + r["top_2_freq"] + r["top_3_freq"]) / 3 for r in results_y]
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(yaws_y, top_1_freqs_y, label="Top 1 Frequency (Y)", marker='o')
+        plt.plot(yaws_y, top_2_freqs_y, label="Top 2 Frequency (Y)", marker='s')
+        plt.plot(yaws_y, top_3_freqs_y, label="Top 3 Frequency (Y)", marker='^')
+        plt.plot(yaws_y, avg_top3_freqs_y, label="Top 3 Avg (Y)", linewidth=3, linestyle='--', color='black')
+        plt.xlabel("Yaw Angle (degrees)")
+        plt.ylabel("Frequency")
+        plt.title(f"Cube {closest_label} - Frequency Changes with Yaw Rotation (Y Axis)")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig("/opt/ros_ws/src/perception/test_images/y_cube_trendchart")
+        plt.close()
+        # plt.show()
+
+        #  ———————————————————————————— choose yaw based on X or Y ————————————————————————————
+        best_yaw = best_yaw_x if max_diff_x > max_diff_y else best_yaw_y
+        # print("max_diff_x", max_diff_x)
+        # print("max_diff_y", max_diff_y)
+        # print("best_yaw", best_yaw)
+
+        cos_yaw, sin_yaw = np.cos(np.radians(best_yaw)), np.sin(np.radians(best_yaw))
+        R_cube_to_world = np.array([
+            [cos_yaw, sin_yaw], 
+            [-sin_yaw, cos_yaw]
+        ])
+        best_middle_xy_world = R_cube_to_world @ np.array([best_middle_x, best_middle_y]) + np.array([midpoint_x, midpoint_y])
+        midpoint_x = best_middle_xy_world[0]# + midpoint_x
+        midpoint_y = best_middle_xy_world[1]# + midpoint_y
+        # midpoint_x = cos_yaw * best_x - sin_yaw * 0 + midpoint_x
+        # midpoint_y = sin_yaw * 0 + cos_yaw * best_y + midpoint_y
+
+        # print("best_yaw:", best_yaw)
+        # print("best_freq_x:", best_freq_x, "best_x:", best_x)
+        # print("best_freq_y:", best_freq_y, "best_y:", best_y)
+        # print("midpoint_x:", midpoint_x)
+        # print("midpoint_y:", midpoint_y)
+
+        return midpoint_x, midpoint_y, best_yaw
 
     def filter_pc(self, point_cloud_np, bboxes):
         if point_cloud_np.shape[1] == 4:
@@ -355,13 +587,16 @@ class Perception:
             midpoint2_x = (x_for_ymax + x_for_ymin) / 2
             midpoint2_y = (ymax + ymin) / 2
             midpoint_x = (midpoint1_x + midpoint2_x) / 2
-            midpoint_y = (midpoint1_y + midpoint2_y) / 2 + 0.004
+            midpoint_y = (midpoint1_y + midpoint2_y) / 2
             # midpoint_z = zmax / 2
-            midpoint_z = (zmax + zmin) / 2 - 0.015
+            midpoint_z = (zmax + zmin) / 2
 
             yaw = self.calculate_angle(
                 x1=xmin, y1=y_for_xmin, x2=x_for_ymax, y2=ymax, x3=0, y3=0, x4=1, y4=0
             )
+
+            midpoint_z = self.find_midpoint_z(points_for_closest_label, closest_label)
+            midpoint_x, midpoint_y, yaw = self.find_midpoint_xy(points_for_closest_label, midpoint_x, midpoint_y, yaw, closest_label)
 
             label_stats[closest_label] = {
                 "translation": (midpoint_x, midpoint_y, midpoint_z),

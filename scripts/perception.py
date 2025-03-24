@@ -35,7 +35,7 @@ parser = argparse.ArgumentParser(
 )
 
 parser.add_argument(
-    "--sim_mode", type=bool, default=True, help="Whether to configure the node for simulation or the real robot"
+    "--sim_mode", type=bool, default=False, help="Whether to configure the node for simulation or the real robot"
 )
 
 # parse the arguments
@@ -64,6 +64,8 @@ class Perception:
         rospy.loginfo("Loading YOLO Model ...")
         self.model = YOLO(model_path)  # Load a trained model
         rospy.loginfo("Finished loading YOLO Model.")
+
+        self.rgb_image = None
 
         # TODO: Most of our time is spent on inference. Can we speed this up?
         # * For example:
@@ -191,6 +193,7 @@ class Perception:
     def find_midpoint_z(self, pointcloud, closest_label):
         z_values = pointcloud[:, 2]
         bins_count = 100 # 50  
+        bins_count = 50  
 
         counts, bins = np.histogram(z_values, bins=bins_count)
 
@@ -248,6 +251,7 @@ class Perception:
 
             # ———————————————————————————— X ————————————————————————————
             bins_count = 100 # 50 
+            bins_count = 50
             counts_x, bins_x = np.histogram(cube_x_values, bins=bins_count)
 
             bin_centers_x = (bins_x[:-1] + bins_x[1:]) / 2
@@ -310,6 +314,7 @@ class Perception:
         best_cube_x_values = cube_xy_x[:, 0]
         
         # print("best_yaw_x:", best_yaw_x)
+        # print("best_freq_x:", best_freq_x, "bes
         # print("best_freq_x:", best_freq_x, "best_x:", best_x)
         # print("midpoint_x:", midpoint_x)
 
@@ -408,20 +413,31 @@ class Perception:
 
         cos_yaw, sin_yaw = np.cos(np.radians(best_yaw)), np.sin(np.radians(best_yaw))
         R_cube_to_world = np.array([
-            [cos_yaw, sin_yaw], 
-            [-sin_yaw, cos_yaw]
+            [cos_yaw, -sin_yaw], 
+            [sin_yaw, cos_yaw]
         ])
-        best_middle_xy_world = R_cube_to_world @ np.array([best_middle_x, best_middle_y]) + np.array([midpoint_x, midpoint_y])
+        # best_middle_xy_world = R_cube_to_world @ np.array([best_x, best_y]) + np.array([midpoint_x, midpoint_y])
+        # best_middle_xy_world = R_cube_to_world @ np.array([best_middle_x, best_middle_y]) + np.array([midpoint_x, midpoint_y])
+        best_middle_xy_world = R_cube_to_world @ np.array([np.abs(best_x) - 0.02, np.abs(best_y) - 0.02]) + np.array([midpoint_x, midpoint_y])
+        
         midpoint_x = best_middle_xy_world[0]# + midpoint_x
         midpoint_y = best_middle_xy_world[1]# + midpoint_y
         # midpoint_x = cos_yaw * best_x - sin_yaw * 0 + midpoint_x
         # midpoint_y = sin_yaw * 0 + cos_yaw * best_y + midpoint_y
+
+        # midpoint_x = midpoint_x + best_x
+        # midpoint_y = midpoint_y + best_y 
+
+        # z_vals = pointcloud[pointcloud[:, 2] > 0.030]
+
+        # x, y = z_vals[:, :2].mean(axis=0)
 
         # print("best_yaw:", best_yaw)
         # print("best_freq_x:", best_freq_x, "best_x:", best_x)
         # print("best_freq_y:", best_freq_y, "best_y:", best_y)
         # print("midpoint_x:", midpoint_x)
         # print("midpoint_y:", midpoint_y)
+        return midpoint_x, midpoint_y, best_yaw
 
         return midpoint_x, midpoint_y, best_yaw
 
@@ -591,22 +607,32 @@ class Perception:
             midpoint1_y = (y_for_xmax + y_for_xmin) / 2
             midpoint2_x = (x_for_ymax + x_for_ymin) / 2
             midpoint2_y = (ymax + ymin) / 2
-            midpoint_x = (midpoint1_x + midpoint2_x) / 2
-            midpoint_y = (midpoint1_y + midpoint2_y) / 2
+            initial_midpoint_x = (midpoint1_x + midpoint2_x) / 2
+            initial_midpoint_y = (midpoint1_y + midpoint2_y) / 2
             # midpoint_z = zmax / 2
-            midpoint_z = (zmax + zmin) / 2
+            initial_midpoint_z = (zmax + zmin) / 2
 
-            yaw = self.calculate_angle(
+            initial_yaw = self.calculate_angle(
                 x1=xmin, y1=y_for_xmin, x2=x_for_ymax, y2=ymax, x3=0, y3=0, x4=1, y4=0
             )
 
             midpoint_z = self.find_midpoint_z(points_for_closest_label, closest_label)
-            midpoint_x, midpoint_y, yaw = self.find_midpoint_xy(points_for_closest_label, midpoint_x, midpoint_y, yaw, closest_label)
+            midpoint_x, midpoint_y, yaw = self.find_midpoint_xy(points_for_closest_label, initial_midpoint_x, initial_midpoint_y, initial_yaw, closest_label)
 
             label_stats[closest_label] = {
                 "translation": (midpoint_x, midpoint_y, midpoint_z),
                 "rotation": (0, 0, yaw),
             }
+
+            label_stats[closest_label+10] = {
+                "translation": (initial_midpoint_x, initial_midpoint_y, initial_midpoint_z),
+                "rotation": (0, 0, initial_yaw),
+            }
+
+            x_axis, y_axis, z_axis = self.cube_axes(
+                initial_midpoint_x, initial_midpoint_y, initial_midpoint_z, initial_yaw
+            )
+            axes.extend([x_axis, y_axis, z_axis])
 
             x_axis, y_axis, z_axis = self.cube_axes(
                 midpoint_x, midpoint_y, midpoint_z, yaw
@@ -628,7 +654,7 @@ class Perception:
         )
         point_cloud.colors = o3d.utility.Vector3dVector(point_colors)
 
-        # o3d.visualization.draw_geometries([point_cloud] + axes)
+        o3d.visualization.draw_geometries([point_cloud] + axes)
         # draw_plotly([point_cloud] + axes)
 
         return points_with_labels, label_stats
@@ -672,6 +698,8 @@ class Perception:
             point_cloud_np = np.array(point_cloud_list)  # .clip(0.3, 15.0)
             # * Sanity check to see if reading the pointcloud and publishing it is destroying something
             # works fine
+
+            np.save("pc", point_cloud_np)
 
             # plt.hist(point_cloud_np[:, 2].clip(-150.0, 150.0))
             # plt.savefig("tmp.png")

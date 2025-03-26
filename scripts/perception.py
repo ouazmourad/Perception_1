@@ -35,7 +35,7 @@ parser = argparse.ArgumentParser(
 )
 
 parser.add_argument(
-    "--sim_mode", type=bool, default=True, help="Whether to configure the node for simulation or the real robot"
+    "--sim_mode", type=bool, default=False, help="Whether to configure the node for simulation or the real robot"
 )
 
 # parse the arguments
@@ -413,12 +413,22 @@ class Perception:
 
         cos_yaw, sin_yaw = np.cos(np.radians(best_yaw)), np.sin(np.radians(best_yaw))
         R_cube_to_world = np.array([
-            [cos_yaw, -sin_yaw], 
-            [sin_yaw, cos_yaw]
+            [cos_yaw, sin_yaw], 
+            [-sin_yaw, cos_yaw]
         ])
-        # best_middle_xy_world = R_cube_to_world @ np.array([best_x, best_y]) + np.array([midpoint_x, midpoint_y])
+
+        if best_x >0:
+            best_x = best_x - 0.022
+        else:
+            best_x = best_x + 0.022
+        if best_y >0:
+            best_y = best_y - 0.022
+        else:
+            best_y = best_y + 0.022
+
+        best_middle_xy_world = R_cube_to_world @ np.array([best_x, best_y]) + np.array([midpoint_x, midpoint_y])
         # best_middle_xy_world = R_cube_to_world @ np.array([best_middle_x, best_middle_y]) + np.array([midpoint_x, midpoint_y])
-        best_middle_xy_world = R_cube_to_world @ np.array([np.abs(best_x) - 0.02, np.abs(best_y) - 0.02]) + np.array([midpoint_x, midpoint_y])
+        # best_middle_xy_world = R_cube_to_world @ np.array([np.abs(best_x) - 0.02, np.abs(best_y) - 0.02]) + np.array([midpoint_x, midpoint_y])
         
         midpoint_x = best_middle_xy_world[0]# + midpoint_x
         midpoint_y = best_middle_xy_world[1]# + midpoint_y
@@ -563,7 +573,7 @@ class Perception:
         #     points_base_frame[:, 0] < 0.81
         # )
         # valid_mask = points_base_frame[:, 1] > -0.45 and points_base_frame[:, 1] < 0.45
-        valid_mask = points_base_frame[:, 2] > 0.03
+        valid_mask = points_base_frame[:, 2] > 0.02
         # valid_mask = points_base_frame[:, 2] < 0.58
 
         points_base_frame = points_base_frame[valid_mask]
@@ -618,6 +628,9 @@ class Perception:
 
             midpoint_z = self.find_midpoint_z(points_for_closest_label, closest_label)
             midpoint_x, midpoint_y, yaw = self.find_midpoint_xy(points_for_closest_label, initial_midpoint_x, initial_midpoint_y, initial_yaw, closest_label)
+
+            midpoint_x = initial_midpoint_x
+            midpoint_y = initial_midpoint_y
 
             label_stats[closest_label] = {
                 "translation": (midpoint_x, midpoint_y, midpoint_z),

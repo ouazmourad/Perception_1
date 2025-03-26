@@ -35,7 +35,7 @@ parser = argparse.ArgumentParser(
 )
 
 parser.add_argument(
-    "--sim_mode", type=bool, default=False, help="Whether to configure the node for simulation or the real robot"
+    "--sim_mode", type=bool, default=True, help="Whether to configure the node for simulation or the real robot"
 )
 
 # parse the arguments
@@ -624,10 +624,10 @@ class Perception:
                 "rotation": (0, 0, yaw),
             }
 
-            label_stats[closest_label+10] = {
-                "translation": (initial_midpoint_x, initial_midpoint_y, initial_midpoint_z),
-                "rotation": (0, 0, initial_yaw),
-            }
+            # label_stats[closest_label+10] = {
+            #     "translation": (initial_midpoint_x, initial_midpoint_y, initial_midpoint_z),
+            #     "rotation": (0, 0, initial_yaw),
+            # }
 
             x_axis, y_axis, z_axis = self.cube_axes(
                 initial_midpoint_x, initial_midpoint_y, initial_midpoint_z, initial_yaw

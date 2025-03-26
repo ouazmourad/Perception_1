@@ -533,6 +533,7 @@ class Perception:
         t = self._tf_listener.getLatestCommonTime(
             self._source_frame, self._target_frame
             )
+        rospy.loginfo(f"Latest Common Time: {t}")
         trans = self._tf_listener.lookupTransform(
             self._source_frame, self._target_frame, t
         )
